@@ -41,3 +41,6 @@ Firmware cache storage is runner-local at `/runner-cache/grow-fleet`, backed by
 `/srv/forgejo-runner/cache/grow-fleet` on the runner host. The workflow does not
 use Codeberg Actions artifacts for this temporary cache; Forgejo generic
 packages remain the durable release output.
+The runner host must create that directory and include it in the runner
+`container.valid_volumes` allowlist; otherwise the runner ignores the bind mount
+before the job starts.
