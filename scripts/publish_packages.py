@@ -17,6 +17,7 @@ def upload_file(
     base_url: str,
     auth_user: str,
     token: str,
+    auth_scheme: str,
     package_user: str,
     package: str,
     version: str,
@@ -30,13 +31,20 @@ def upload_file(
         f"{quote(file_path.name, safe='')}"
     )
     data = file_path.read_bytes()
-    basic_auth = base64.b64encode(f"{auth_user}:{token}".encode("utf-8")).decode("ascii")
+    if auth_scheme == "basic":
+        auth_value = base64.b64encode(f"{auth_user}:{token}".encode("utf-8")).decode("ascii")
+        authorization = f"Basic {auth_value}"
+    elif auth_scheme == "bearer":
+        authorization = f"Bearer {token}"
+    else:
+        raise ValueError(f"unsupported auth scheme: {auth_scheme}")
+
     request = Request(
         target_url,
         data=data,
         method="PUT",
         headers={
-            "Authorization": f"Basic {basic_auth}",
+            "Authorization": authorization,
             "Content-Type": "application/octet-stream",
         },
     )
@@ -44,7 +52,15 @@ def upload_file(
         response.read()
 
 
-def publish_device(dist_root: Path, device: str, package_user: str, auth_user: str, token: str, base_url: str) -> None:
+def publish_device(
+    dist_root: Path,
+    device: str,
+    package_user: str,
+    auth_user: str,
+    token: str,
+    auth_scheme: str,
+    base_url: str,
+) -> None:
     device_dir = dist_root / device
     manifest_path = device_dir / f"{device}.manifest.json"
     if not manifest_path.exists():
@@ -55,7 +71,16 @@ def publish_device(dist_root: Path, device: str, package_user: str, auth_user: s
     version = manifest["version"]
 
     for filename in manifest["artifact_filenames"] + [manifest_path.name]:
-        upload_file(base_url, auth_user, token, package_user, package, version, device_dir / filename)
+        upload_file(
+            base_url,
+            auth_user,
+            token,
+            auth_scheme,
+            package_user,
+            package,
+            version,
+            device_dir / filename,
+        )
 
 
 def main() -> None:
@@ -79,13 +104,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    token = os.environ.get("PACKAGE_TOKEN") or os.environ.get("FORGEJO_TOKEN")
+    package_token = os.environ.get("PACKAGE_TOKEN")
+    forgejo_token = os.environ.get("FORGEJO_TOKEN")
+    token = package_token or forgejo_token
     if not token:
         raise SystemExit("PACKAGE_TOKEN or FORGEJO_TOKEN is required")
+    auth_scheme = "basic" if package_token else "bearer"
 
     dist_root = Path(args.dist_root)
     for device in args.devices:
-        publish_device(dist_root, device, args.package_user, args.auth_user, token, args.base_url)
+        publish_device(
+            dist_root,
+            device,
+            args.package_user,
+            args.auth_user,
+            token,
+            auth_scheme,
+            args.base_url,
+        )
 
 
 if __name__ == "__main__":
