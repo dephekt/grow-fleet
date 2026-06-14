@@ -1,0 +1,28 @@
+component_dependency: &stackdrift_esphome_components
+  source:
+    type: git
+    url: https://codeberg.org/stackdrift/esphome-components.git
+    ref: 1b6242a3afe71e96eec577155ae3d86d58d3ac3c
+    path: .
+
+devices:
+  atlas-hydro-kit:
+    config: devices/atlas-hydro-kit.yaml
+    esphome_name: atlas-hydro-monitor
+    package: atlas-hydro-kit
+    release: true
+    component_dependency: *stackdrift_esphome_components
+  atoms3u-sensor-rig:
+    config: devices/atoms3u-sensor-rig.yaml
+    esphome_name: atoms3u-sensor-rig
+    package: atoms3u-sensor-rig
+    release: true
+    assets:
+      - assets/thermal_overlay.js
+    component_dependency: *stackdrift_esphome_components
+  m5stack-airq:
+    config: devices/m5stack-airq.yaml
+    esphome_name: m5stack-airq
+    package: m5stack-airq
+    release: true
+    component_dependency: *stackdrift_esphome_components

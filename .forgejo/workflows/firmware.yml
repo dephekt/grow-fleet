@@ -1,0 +1,156 @@
+name: firmware
+
+on:
+  pull_request:
+    paths:
+      - "assets/**"
+      - "devices/**"
+      - "fleet.yaml"
+      - "scripts/**"
+      - ".forgejo/workflows/firmware.yml"
+  push: {}
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Optional device to compile"
+        required: false
+        type: string
+
+jobs:
+  pr_prepare:
+    if: github.event_name == 'pull_request'
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_devices: ${{ steps.matrix.outputs.has_devices }}
+    steps:
+      - name: Checkout repository
+        run: |
+          set -eu
+          server="${FORGEJO_SERVER_URL:-${GITHUB_SERVER_URL:-https://codeberg.org}}"
+          repo="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY:-stackdrift/grow-fleet}}"
+          sha="${FORGEJO_SHA:-${GITHUB_SHA:?missing checkout sha}}"
+          repo_url="${server}/${repo}.git"
+          git init .
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "$repo_url"
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout --detach "$sha"
+      - id: matrix
+        run: |
+          MATRIX="$(python3 scripts/impacted_devices.py --base '${{ github.event.pull_request.base.sha }}' --head '${{ github.event.pull_request.head.sha }}' --matrix)"
+          HAS_DEVICES="$(MATRIX="$MATRIX" python3 -c 'import json, os; payload = json.loads(os.environ["MATRIX"]); print("true" if payload.get("include") else "false")')"
+          output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
+          echo "matrix=$MATRIX" >> "$output_path"
+          echo "has_devices=$HAS_DEVICES" >> "$output_path"
+
+  pr_compile:
+    if: github.event_name == 'pull_request' && needs.pr_prepare.outputs.has_devices == 'true'
+    needs: pr_prepare
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    strategy:
+      matrix: ${{ fromJson(needs.pr_prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        run: |
+          set -eu
+          server="${FORGEJO_SERVER_URL:-${GITHUB_SERVER_URL:-https://codeberg.org}}"
+          repo="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY:-stackdrift/grow-fleet}}"
+          sha="${FORGEJO_SHA:-${GITHUB_SHA:?missing checkout sha}}"
+          repo_url="${server}/${repo}.git"
+          git init .
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "$repo_url"
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout --detach "$sha"
+      - name: Compile impacted device
+        run: python3 scripts/compile_devices.py "${{ matrix.device }}"
+
+  main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - name: Checkout repository
+        run: |
+          set -eu
+          server="${FORGEJO_SERVER_URL:-${GITHUB_SERVER_URL:-https://codeberg.org}}"
+          repo="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY:-stackdrift/grow-fleet}}"
+          sha="${FORGEJO_SHA:-${GITHUB_SHA:?missing checkout sha}}"
+          repo_url="${server}/${repo}.git"
+          git init .
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "$repo_url"
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout --detach "$sha"
+      - name: Compile all devices
+        run: python3 scripts/compile_devices.py --all
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/firmware/')
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - name: Checkout repository
+        run: |
+          set -eu
+          server="${FORGEJO_SERVER_URL:-${GITHUB_SERVER_URL:-https://codeberg.org}}"
+          repo="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY:-stackdrift/grow-fleet}}"
+          sha="${FORGEJO_SHA:-${GITHUB_SHA:?missing checkout sha}}"
+          repo_url="${server}/${repo}.git"
+          git init .
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "$repo_url"
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout --detach "$sha"
+      - id: meta
+        run: |
+          tag="${FORGEJO_REF_NAME:-$GITHUB_REF_NAME}"
+          rest="${tag#firmware/}"
+          device="${rest%%/v*}"
+          version="${tag#firmware/$device/}"
+          output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
+          echo "device=$device" >> "$output_path"
+          echo "version=$version" >> "$output_path"
+      - name: Compile release device
+        run: python3 scripts/compile_devices.py "${{ steps.meta.outputs.device }}"
+      - name: Package release device
+        run: python3 scripts/package_device.py "${{ steps.meta.outputs.device }}" --version "${{ steps.meta.outputs.version }}" --source-sha "${{ github.sha }}"
+      - name: Publish release device
+        env:
+          PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: python3 scripts/publish_packages.py "${{ steps.meta.outputs.device }}"
+
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - name: Checkout repository
+        run: |
+          set -eu
+          server="${FORGEJO_SERVER_URL:-${GITHUB_SERVER_URL:-https://codeberg.org}}"
+          repo="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY:-stackdrift/grow-fleet}}"
+          sha="${FORGEJO_SHA:-${GITHUB_SHA:?missing checkout sha}}"
+          repo_url="${server}/${repo}.git"
+          git init .
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "$repo_url"
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout --detach "$sha"
+      - name: Compile requested devices
+        run: |
+          if [ -n "${{ inputs.device }}" ]; then
+            python3 scripts/compile_devices.py "${{ inputs.device }}"
+          else
+            python3 scripts/compile_devices.py --all
+          fi

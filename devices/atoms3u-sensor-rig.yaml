@@ -1,0 +1,440 @@
+# Headless AtomS3U bench rig — exercises the grow-monitor SENSOR pipeline.
+# No display (that lives on the CoreS3 via grow_env_monitor); this node just
+# reads sensors and serves them over the web/API + the thermal JPEG endpoint.
+#
+# Hardware — all I2C on one Grove chain off the AtomS3U's Port A:
+#   M5Stack CO2L    (SCD41)    @ 0x62  -> scd4x + scd4x_stats + scd4x_alerts
+#   M5Stack THERMAL (MLX90640) @ 0x33  -> mlx90640 (+ /thermal.jpg)
+#   M5Stack BPS     (QMP6988)  @ 0x56  -> stock qmp6988
+#   M5Stack DLIGHT (BH1750FVI) @ 0x23  -> stock bh1750
+#
+# Build / flash:
+#   esphome compile devices/atoms3u-sensor-rig.yaml
+#   esphome run     devices/atoms3u-sensor-rig.yaml --device /dev/ttyACM0
+#   esphome logs    devices/atoms3u-sensor-rig.yaml --device /dev/ttyACM0
+
+substitutions:
+  devicename: atoms3u-sensor-rig
+  friendlyname: "AtomS3U Sensor Rig"
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  libraries:
+    - Wire          # mlx90640 includes <Wire.h>
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB   # AtomS3U = ESP32-S3FN8, 8MB flash, no PSRAM
+  framework:
+    type: arduino
+
+# Reusable components are pulled from the pinned stackdrift/esphome-components
+# commit tracked in fleet.yaml.
+external_components:
+  - source:
+      type: git
+      url: https://codeberg.org/stackdrift/esphome-components.git
+      ref: 1b6242a3afe71e96eec577155ae3d86d58d3ac3c
+      path: .
+    components:
+      - mlx90640
+      - scd4x_stats
+      - scd4x_alerts
+
+logger:
+  level: DEBUG   # DEBUG during bring-up to see the I2C scan + live sensor values
+  hardware_uart: USB_SERIAL_JTAG   # AtomS3U has native USB only (no UART chip)
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# MQTT -> our own broker (mosquitto-site on media-server). grow-control Phase 0.
+# Coexists with api: above — HA stays an optional observer, never in the path.
+# Discovery is scoped inside the site broker ACL so grow-app can derive entities
+# from retained ESPHome/Home Assistant MQTT discovery payloads without exposing
+# a global homeassistant/# prefix.
+mqtt:
+  broker: 192.168.8.3              # media-server LAN IP; mosquitto-site listens on :1883
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/atoms3u-sensor-rig
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  # Keep the firmware's DEBUG logs OFF the bus (serial + API still carry them).
+  # The MLX per-frame / JPEG debug would otherwise flood the broker and bridge.
+  log_topic:
+    topic: grow/daniel-home/atoms3u-sensor-rig/debug
+    level: NONE
+  on_connect:
+    - mqtt.publish:
+        topic: grow/daniel-home/atoms3u-sensor-rig/_ui/config
+        retain: true
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "atoms3u-sensor-rig",
+            "groups": [
+              { "id": "overview", "title": "Environment", "order": 10, "variant": "metrics", "defaultOpen": true },
+              { "id": "thresholds", "title": "Thresholds & Alerts", "order": 20, "defaultOpen": true },
+              { "id": "thermal", "title": "Thermal Camera", "order": 30, "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor", "objectId": "co2", "group": "overview", "role": "metric", "order": 10 },
+              { "component": "sensor", "objectId": "temperature", "group": "overview", "role": "metric", "order": 20 },
+              { "component": "sensor", "objectId": "humidity", "group": "overview", "role": "metric", "order": 30 },
+              { "component": "sensor", "objectId": "vpd", "group": "overview", "role": "metric", "order": 40 },
+              { "component": "sensor", "objectId": "illuminance", "group": "overview", "role": "metric", "order": 50 },
+              { "component": "sensor", "objectId": "barometric_pressure", "group": "overview", "role": "metric", "order": 60, "label": "Pressure" },
+              { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
+              { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
+              { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
+              { "component": "binary_sensor", "objectId": "co2_low_alert", "group": "thresholds", "order": 40 },
+              { "component": "number", "objectId": "temperature_high_threshold", "group": "thresholds", "order": 50 },
+              { "component": "number", "objectId": "temperature_low_threshold", "group": "thresholds", "order": 60 },
+              { "component": "binary_sensor", "objectId": "temperature_high_alert", "group": "thresholds", "order": 70 },
+              { "component": "binary_sensor", "objectId": "temperature_low_alert", "group": "thresholds", "order": 80 },
+              { "component": "number", "objectId": "humidity_high_threshold", "group": "thresholds", "order": 90 },
+              { "component": "number", "objectId": "humidity_low_threshold", "group": "thresholds", "order": 100 },
+              { "component": "binary_sensor", "objectId": "humidity_high_alert", "group": "thresholds", "order": 110 },
+              { "component": "binary_sensor", "objectId": "humidity_low_alert", "group": "thresholds", "order": 120 },
+              { "component": "number", "objectId": "vpd_high_threshold", "group": "thresholds", "order": 130 },
+              { "component": "number", "objectId": "vpd_low_threshold", "group": "thresholds", "order": 140 },
+              { "component": "binary_sensor", "objectId": "vpd_high_alert", "group": "thresholds", "order": 150 },
+              { "component": "binary_sensor", "objectId": "vpd_low_alert", "group": "thresholds", "order": 160 },
+              { "component": "sensor", "objectId": "mlx90640_min_temp", "group": "thermal", "order": 10 },
+              { "component": "sensor", "objectId": "mlx90640_mean_temp", "group": "thermal", "order": 20 },
+              { "component": "sensor", "objectId": "mlx90640_max_temp", "group": "thermal", "order": 30 },
+              { "component": "sensor", "objectId": "mlx90640_roi_min_temp", "group": "thermal", "order": 40 },
+              { "component": "sensor", "objectId": "mlx90640_roi_mean_temp", "group": "thermal", "order": 50 },
+              { "component": "sensor", "objectId": "mlx90640_roi_max_temp", "group": "thermal", "order": 60 },
+              { "component": "select", "objectId": "thermal_color_palette", "group": "thermal", "order": 70 },
+              { "component": "switch", "objectId": "thermal_overlay_enable", "group": "thermal", "order": 80 },
+              { "component": "number", "objectId": "thermal_update_interval", "group": "thermal", "order": 90 },
+              { "component": "switch", "objectId": "roi_enabled", "group": "thermal", "order": 100 },
+              { "component": "number", "objectId": "roi_center_row", "group": "thermal", "order": 110 },
+              { "component": "number", "objectId": "roi_center_column", "group": "thermal", "order": 120 },
+              { "component": "number", "objectId": "roi_size", "group": "thermal", "order": 130 },
+              { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
+            ]
+          }
+
+i2c:
+  sda: 2            # AtomS3U Grove Port A: G2 = GPIO2 = SDA
+  scl: 1            # AtomS3U Grove Port A: G1 = GPIO1 = SCL
+  frequency: 400kHz # MLX90640 full-frame readout is bandwidth-heavy
+  scan: true
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+web_server_base:
+  id: my_web_server_base
+
+web_server:
+  version: 3
+  port: 80
+  # Bake a small script into the firmware (served at /0.js) that appends a live,
+  # auto-refreshing thermal image card to the dashboard. The web UI only renders
+  # entity tiles otherwise, so the /thermal.jpg image would not show here.
+  js_include: "../assets/thermal_overlay.js"
+  sorting_groups:
+    - id: environmental_monitoring
+      name: "Environmental Monitoring"
+      sorting_weight: 10
+    - id: thermal_camera_group
+      name: "Thermal Camera"
+      sorting_weight: 20
+    - id: environmental_alerts
+      name: "Environmental Alerts"
+      sorting_weight: 30
+    - id: diagnostics
+      name: "Diagnostics"
+      sorting_weight: 40
+
+# ---------------- Thermal camera (MLX90640) ----------------
+mlx90640:
+  id: thermal_camera
+  refresh_rate: "16Hz"
+  resolution: "18-bit"
+  pattern: "chess"
+  thermal_palette: "ironblack"
+  single_frame: false
+  update_interval: 2000           # milliseconds (component uses a raw int)
+  web_server:
+    enable: true
+    path: "/thermal.jpg"
+    quality: 90
+    web_server_base_id: my_web_server_base
+  roi:
+    enabled: false
+    center_row: 6
+    center_col: 6
+    size: 1
+  temperature_sensors:
+    min:
+      name: "MLX90640 Min temp"
+      id: mlx_min_temp
+      web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 10 }
+    max:
+      name: "MLX90640 Max temp"
+      id: mlx_max_temp
+      web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 20 }
+    avg:
+      name: "MLX90640 Mean temp"
+      id: mlx_mean_temp
+      web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 30 }
+    roi_min:
+      name: "MLX90640 ROI Min temp"
+      id: mlx_roi_min_temp
+      web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 40 }
+    roi_max:
+      name: "MLX90640 ROI Max temp"
+      id: mlx_roi_max_temp
+      web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 50 }
+    roi_avg:
+      name: "MLX90640 ROI Mean temp"
+      id: mlx_roi_avg_temp
+      web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 60 }
+  update_interval_control:
+    name: "Thermal Update Interval"
+    min_value: 100
+    max_value: 30000
+    step: 100
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 80 }
+  thermal_palette_control:
+    name: "Thermal Color Palette"
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 70 }
+  roi_enabled_control:
+    name: "ROI Enabled"
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 120 }
+  roi_center_row_control:
+    name: "ROI Center Row"
+    min_value: 1
+    max_value: 24
+    step: 1
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 90 }
+  roi_center_col_control:
+    name: "ROI Center Column"
+    min_value: 1
+    max_value: 32
+    step: 1
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 100 }
+  roi_size_control:
+    name: "ROI Size"
+    min_value: 1
+    max_value: 10
+    step: 1
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 110 }
+  web_overlay_enabled_control:
+    name: "Thermal Overlay Enable"
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 75 }
+
+# ---------------- Sensors ----------------
+sensor:
+  # CO2 / temp / humidity (SCD41). CO2L supports single-shot; periodic is
+  # simplest for the bench (switch to measurement_mode: single_shot later).
+  - platform: scd4x
+    id: co2_component
+    co2:
+      name: "CO2"
+      id: co2_sensor
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 10 }
+    temperature:
+      name: "Temperature"
+      id: temperature_sensor
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 20 }
+    humidity:
+      name: "Humidity"
+      id: humidity_sensor
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 30 }
+
+  # Barometric pressure (QMP6988 / BPS unit) — stock ESPHome component.
+    # This BPS unit answers at 0x70 (confirmed via i2c scan), not 0x56.
+  - platform: qmp6988
+    address: 0x70
+    update_interval: 60s
+    iir_filter: 2x
+    temperature:
+      name: "BPS Temperature"
+      id: bps_temperature
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 45 }
+    pressure:
+      name: "Barometric Pressure"
+      id: pressure_sensor
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 50 }
+
+  # Ambient light (DLight unit / BH1750FVI) — stock ESPHome component.
+  - platform: bh1750
+    name: "Illuminance"
+    id: illuminance_sensor
+    address: 0x23
+    update_interval: 30s
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 55 }
+
+  # Diagnostics
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 10 }
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 20 }
+
+# ---------------- CO2 statistics (VPD, daily min/max, moving avgs) ----------------
+scd4x_stats:
+  id: co2_stats
+  co2_sensor: co2_sensor
+  temperature_sensor: temperature_sensor
+  humidity_sensor: humidity_sensor
+  time_id: sntp_time
+  vpd:
+    name: "VPD"
+    id: vpd_sensor
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 40 }
+  daily_max_co2:
+    name: "Daily Max CO2"
+    id: daily_max_co2
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 60 }
+  daily_min_temp:
+    name: "Daily Min Temperature"
+    id: daily_min_temp
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 70 }
+  daily_max_temp:
+    name: "Daily Max Temperature"
+    id: daily_max_temp
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 80 }
+  co2_moving_avg:
+    name: "CO2 Moving Average"
+    id: co2_moving_avg
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 90 }
+  temp_moving_avg:
+    name: "Temperature Moving Average"
+    id: temp_moving_avg
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 95 }
+
+# ---------------- CO2 alerts (thresholds -> binary sensors + number controls) ----------------
+scd4x_alerts:
+  id: co2_alerts
+  co2_sensor: co2_sensor
+  temperature_sensor: temperature_sensor
+  humidity_sensor: humidity_sensor
+  vpd_sensor: vpd_sensor
+  co2_high_threshold: 1500
+  co2_low_threshold: 800
+  temp_high_threshold: 30
+  temp_low_threshold: 18
+  humidity_high_threshold: 70
+  humidity_low_threshold: 40
+  vpd_high_threshold: 1.5
+  vpd_low_threshold: 0.4
+  co2_high_alert:
+    name: "CO2 High Alert"
+    id: co2_high_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 30 }
+  co2_low_alert:
+    name: "CO2 Low Alert"
+    id: co2_low_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 40 }
+  temp_high_alert:
+    name: "Temperature High Alert"
+    id: temp_high_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 50 }
+  temp_low_alert:
+    name: "Temperature Low Alert"
+    id: temp_low_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 60 }
+  humidity_high_alert:
+    name: "Humidity High Alert"
+    id: humidity_high_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 70 }
+  humidity_low_alert:
+    name: "Humidity Low Alert"
+    id: humidity_low_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 80 }
+  vpd_high_alert:
+    name: "VPD High Alert"
+    id: vpd_high_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 90 }
+  vpd_low_alert:
+    name: "VPD Low Alert"
+    id: vpd_low_alert
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 100 }
+  co2_high_threshold_number:
+    name: "CO2 High Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 10 }
+  co2_low_threshold_number:
+    name: "CO2 Low Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 20 }
+  temp_high_threshold_number:
+    name: "Temperature High Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 25 }
+  temp_low_threshold_number:
+    name: "Temperature Low Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 35 }
+  humidity_high_threshold_number:
+    name: "Humidity High Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 45 }
+  humidity_low_threshold_number:
+    name: "Humidity Low Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 55 }
+  vpd_high_threshold_number:
+    name: "VPD High Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 65 }
+  vpd_low_threshold_number:
+    name: "VPD Low Threshold"
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 75 }
+
+# Dummy internal template entities so the number/select/switch/binary_sensor
+# platforms are registered (mlx90640 auto-creates number/select/switch
+# controls; scd4x_alerts DEPENDENCIES-requires binary_sensor). Mirrors the
+# known-good grow-monitor config.
+binary_sensor:
+  - platform: template
+    name: "Dummy Template Binary Sensor"
+    id: dummy_template_binary_sensor
+    internal: true
+number:
+  - platform: template
+    name: "Dummy Template Number"
+    id: dummy_template_number
+    min_value: 0
+    max_value: 1
+    step: 1
+    optimistic: true
+    internal: true
+select:
+  - platform: template
+    name: "Dummy Template Select"
+    id: dummy_template_select
+    options: ["Option 1", "Option 2"]
+    optimistic: true
+    internal: true
+switch:
+  - platform: template
+    name: "Dummy Template Switch"
+    id: dummy_template_switch
+    optimistic: true
+    internal: true
+
+button:
+  - platform: restart
+    name: "Restart"
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      web_server: { sorting_group_id: diagnostics, sorting_weight: 90 }
