@@ -2,7 +2,7 @@ component_dependency: &stackdrift_esphome_components
   source:
     type: git
     url: https://codeberg.org/stackdrift/esphome-components.git
-    ref: 1b6242a3afe71e96eec577155ae3d86d58d3ac3c
+    ref: 798fa7268b5940f1dcfef3ff05e601e5b004fe81
     path: .
 
 devices:
