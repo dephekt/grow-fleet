@@ -126,7 +126,6 @@ jobs:
         env:
           PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
           PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
         run: python3 scripts/publish_packages.py "${{ steps.meta.outputs.device }}"
 
   dispatch:
