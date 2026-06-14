@@ -6,20 +6,14 @@ import json
 import shutil
 from pathlib import Path
 
-from fleetlib import ROOT, capture, device_spec, esphome_version, fleet_component_dependency, sha256_file
+from fleetlib import capture, device_spec, esphome_version, firmware_artifacts, fleet_component_dependency, sha256_file
 
 
 def package_device(name: str, version: str, source_sha: str, dist_root: Path) -> Path:
     spec = device_spec(name)
-    build_root = (
-        ROOT
-        / "devices/.esphome/build"
-        / spec.esphome_name
-        / ".pioenvs"
-        / spec.esphome_name
-    )
-    ota_source = build_root / "firmware.ota.bin"
-    factory_source = build_root / "firmware.factory.bin"
+    artifacts = firmware_artifacts(name)
+    ota_source = artifacts["ota"]
+    factory_source = artifacts["factory"]
     if not ota_source.exists():
         raise FileNotFoundError(f"missing artifact: {ota_source}")
     if not factory_source.exists():
