@@ -1,0 +1,5 @@
+.esphome/
+devices/secrets.yaml
+secrets.yaml
+dist/
+*.log
