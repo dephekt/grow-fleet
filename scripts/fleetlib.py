@@ -88,6 +88,18 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def firmware_build_dir(spec: DeviceSpec) -> Path:
+    return ROOT / "devices/.esphome/build" / spec.esphome_name / ".pioenvs" / spec.esphome_name
+
+
+def firmware_artifacts(name: str) -> dict[str, Path]:
+    build_root = firmware_build_dir(device_spec(name))
+    return {
+        "ota": build_root / "firmware.ota.bin",
+        "factory": build_root / "firmware.factory.bin",
+    }
+
+
 def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, cwd=cwd or ROOT, env=env, check=True)
 
