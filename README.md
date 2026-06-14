@@ -17,6 +17,8 @@ Common local commands:
 python3 scripts/list_devices.py
 python3 scripts/impacted_devices.py --base <base-sha> --head <head-sha>
 python3 scripts/compile_devices.py --all
+FIRMWARE_CACHE_ROOT=/tmp/grow-fleet-cache python3 scripts/cache_firmware.py store --sha <sha> --all
+FIRMWARE_CACHE_ROOT=/tmp/grow-fleet-cache python3 scripts/cache_firmware.py restore --sha <sha> atlas-hydro-kit
 python3 scripts/package_device.py atlas-hydro-kit --version v1.2.3
 python3 scripts/publish_packages.py atlas-hydro-kit
 ```
@@ -31,5 +33,11 @@ automatic `FORGEJO_TOKEN`, and defaults to the `stackdrift` package namespace.
 Workflow behavior:
 
 - Pull requests compile only impacted devices.
-- Pushes to `main` compile every device.
-- Tags matching `firmware/<device>/vX.Y.Z` compile, package, and publish that one device.
+- Pull requests and manual dispatches share the runner-local PlatformIO cache.
+- Pushes to `main` compile every device, store compiled firmware under the runner-local cache keyed by commit SHA, and prune old cached firmware.
+- Tags matching `firmware/<device>/vX.Y.Z` restore cached firmware for the tagged commit when available, falling back to compile/store on a miss, then package and publish that one device.
+
+Firmware cache storage is runner-local at `/runner-cache/grow-fleet`, backed by
+`/srv/forgejo-runner/cache/grow-fleet` on the runner host. The workflow does not
+use Codeberg Actions artifacts for this temporary cache; Forgejo generic
+packages remain the durable release output.
