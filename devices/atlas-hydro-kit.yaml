@@ -1,0 +1,674 @@
+substitutions:
+  device_mac: "atlas01"
+
+esphome:
+  name: atlas-hydro-monitor
+  friendly_name: Atlas Hydro Monitor
+
+esp32:
+  board: featheresp32
+  framework:
+    type: arduino
+
+ota:
+  - platform: esphome
+    password: !secret hydro_monitor_ota_key
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+external_components:
+  - source:
+      type: git
+      url: https://codeberg.org/stackdrift/esphome-components.git
+      ref: 1b6242a3afe71e96eec577155ae3d86d58d3ac3c
+      path: .
+    components: ["ezo_types"]
+
+logger:
+  level: DEBUG
+
+captive_portal:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true
+  passive_scan: false
+  power_save_mode: none
+  ap:
+    ssid: "atlas-${device_mac}"
+    password: !secret fallback_hotspot_key
+
+# MQTT -> our own broker (mosquitto-site on media-server). grow-control Phase 0.
+# Coexists with api: above — HA stays an optional observer, never in the path.
+# Discovery is scoped inside the site broker ACL so grow-app can derive entities
+# from retained ESPHome/Home Assistant MQTT discovery payloads without exposing
+# a global homeassistant/# prefix. Firmware DEBUG logs stay off the bus.
+mqtt:
+  broker: 192.168.8.3              # media-server LAN IP; mosquitto-site listens on :1883
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/atlas-hydro-monitor
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/atlas-hydro-monitor/debug
+    level: NONE
+  on_connect:
+    - mqtt.publish:
+        topic: grow/daniel-home/atlas-hydro-monitor/_ui/config
+        retain: true
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "atlas-hydro-monitor",
+            "groups": [
+              { "id": "overview", "title": "At a Glance", "order": 10, "variant": "metrics", "defaultOpen": true },
+              { "id": "controls", "title": "Circuit Controls", "order": 20, "defaultOpen": true },
+              { "id": "temp_comp", "title": "Temperature Compensation", "order": 25, "defaultOpen": true },
+              { "id": "ph_cal", "title": "pH Calibration", "order": 30, "defaultOpen": false },
+              { "id": "ec_cal", "title": "EC Calibration", "order": 40, "defaultOpen": false },
+              { "id": "rtd_cal", "title": "RTD Calibration", "order": 50, "defaultOpen": false },
+              { "id": "orp_cal", "title": "ORP Calibration", "order": 60, "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor", "objectId": "water_temperature", "group": "overview", "role": "metric", "order": 10, "label": "Water Temp" },
+              { "component": "sensor", "objectId": "water_ph", "group": "overview", "role": "metric", "order": 20, "label": "Water pH" },
+              { "component": "sensor", "objectId": "water_ec", "group": "overview", "role": "metric", "order": 30, "label": "Water EC" },
+              { "component": "sensor", "objectId": "water_tds", "group": "overview", "role": "metric", "order": 40, "label": "Water TDS" },
+              { "component": "sensor", "objectId": "water_orp", "group": "overview", "role": "metric", "order": 50, "label": "Water ORP" },
+              { "component": "switch", "objectId": "enable_ph_circuit", "group": "controls", "order": 10 },
+              { "component": "switch", "objectId": "enable_ec_circuit", "group": "controls", "order": 20 },
+              { "component": "switch", "objectId": "enable_rtd_circuit", "group": "controls", "order": 30 },
+              { "component": "switch", "objectId": "enable_aux_circuit", "group": "controls", "order": 40 },
+              { "component": "select", "objectId": "ec_cell_constant", "group": "controls", "order": 50 },
+              { "component": "number", "objectId": "ec_tds_conversion_factor", "group": "controls", "order": 60 },
+              { "component": "switch", "objectId": "orp_extended_scale", "group": "controls", "order": 70 },
+              { "component": "switch", "objectId": "ph_temperature_compensation", "group": "temp_comp", "order": 10, "label": "pH Compensation Enabled" },
+              { "component": "sensor", "objectId": "ph_temperature_compensation", "group": "temp_comp", "order": 20, "label": "pH Compensation Temp" },
+              { "component": "switch", "objectId": "ec_temperature_compensation", "group": "temp_comp", "order": 30, "label": "EC Compensation Enabled" },
+              { "component": "sensor", "objectId": "ec_temperature_compensation", "group": "temp_comp", "order": 40, "label": "EC Compensation Temp" },
+              { "component": "switch", "objectId": "ph_calibration_mode", "group": "ph_cal", "order": 10 },
+              { "component": "sensor", "objectId": "ph_calibration_status", "group": "ph_cal", "order": 20 },
+              { "component": "sensor", "objectId": "ph_acid_slope_quality", "group": "ph_cal", "order": 30 },
+              { "component": "sensor", "objectId": "ph_alkaline_slope_quality", "group": "ph_cal", "order": 40 },
+              { "component": "sensor", "objectId": "ph_asymmetry_potential", "group": "ph_cal", "order": 50 },
+              { "component": "button", "objectId": "ph_cal_mid__7_00_", "group": "ph_cal", "order": 60 },
+              { "component": "button", "objectId": "ph_cal_low__4_00_", "group": "ph_cal", "order": 70 },
+              { "component": "button", "objectId": "ph_cal_high__10_00_", "group": "ph_cal", "order": 80 },
+              { "component": "button", "objectId": "ph_clear_calibration", "group": "ph_cal", "order": 90 },
+              { "component": "switch", "objectId": "ec_calibration_mode", "group": "ec_cal", "order": 10 },
+              { "component": "sensor", "objectId": "ec_calibration_status", "group": "ec_cal", "order": 20 },
+              { "component": "button", "objectId": "ec_dry_calibration", "group": "ec_cal", "order": 30 },
+              { "component": "button", "objectId": "ec_cal_low__1413___s___cm_", "group": "ec_cal", "order": 40 },
+              { "component": "button", "objectId": "ec_cal_high__5000___s___cm_", "group": "ec_cal", "order": 50 },
+              { "component": "button", "objectId": "ec_clear_calibration", "group": "ec_cal", "order": 60 },
+              { "component": "sensor", "objectId": "rtd_calibration_status", "group": "rtd_cal", "order": 10 },
+              { "component": "button", "objectId": "rtd_calibration__25_0__c_", "group": "rtd_cal", "order": 20 },
+              { "component": "button", "objectId": "rtd_clear_calibration", "group": "rtd_cal", "order": 30 },
+              { "component": "sensor", "objectId": "orp_calibration_status", "group": "orp_cal", "order": 10 },
+              { "component": "button", "objectId": "orp_calibration__400_mv_", "group": "orp_cal", "order": 20 },
+              { "component": "button", "objectId": "orp_clear_calibration", "group": "orp_cal", "order": 30 },
+              { "component": "button", "objectId": "refresh_circuit_state", "group": "maintenance", "order": 10 },
+              { "component": "button", "objectId": "restart_device", "group": "maintenance", "order": 20 },
+              { "component": "button", "objectId": "ph_factory_reset", "group": "maintenance", "order": 30 },
+              { "component": "button", "objectId": "ec_factory_reset", "group": "maintenance", "order": 40 },
+              { "component": "button", "objectId": "rtd_factory_reset", "group": "maintenance", "order": 50 },
+              { "component": "button", "objectId": "orp_factory_reset", "group": "maintenance", "order": 60 }
+            ]
+          }
+
+web_server:
+  version: 3
+  port: 80
+
+  sorting_groups:
+    # Layout order -- Configuration and Diagnostic are pinned to the top by
+    # web_server v3, then: At a Glance, the calibration sections, and finally
+    # the per-circuit detail groups.
+    - id: overview
+      name: "At a Glance"
+      sorting_weight: 5
+    - id: temp_comp
+      name: "Temperature Compensation"
+      sorting_weight: 8
+    - id: ph_cal
+      name: "pH Calibration"
+      sorting_weight: 10
+    - id: ec_cal
+      name: "EC Calibration"
+      sorting_weight: 12
+    - id: rtd_cal
+      name: "RTD Calibration"
+      sorting_weight: 13
+    - id: orp_cal
+      name: "ORP Calibration"
+      sorting_weight: 14
+    - id: ph_circuit
+      name: "pH Circuit"
+      sorting_weight: 20
+    - id: ec_circuit
+      name: "EC Circuit"
+      sorting_weight: 22
+    - id: rtd_circuit
+      name: "RTD Circuit"
+      sorting_weight: 24
+    - id: orp_circuit
+      name: "ORP Circuit"
+      sorting_weight: 26
+    - id: diagnostic
+      name: "Diagnostic"
+      sorting_weight: 80
+
+i2c:
+  sda: 23
+  scl: 22
+  scan: true
+
+status_led:
+  pin:
+    number: GPIO13
+    inverted: true
+
+binary_sensor:
+  - platform: status
+    name: "Home Assistant API Status"
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: diagnostic
+
+text_sensor:
+  - platform: version
+    name: "ESP Version"
+    hide_timestamp: true
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: diagnostic
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: diagnostic
+    ssid:
+      name: "Connected SSID"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: diagnostic
+    bssid:
+      name: "Connected BSSID"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: diagnostic
+    mac_address:
+      name: "MAC Address"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: diagnostic
+    dns_address:
+      name: "DNS Address"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: diagnostic
+
+sensor:
+  - platform: ezo_types
+    type: ph
+    id: ph_sensor
+    name: "Water pH"
+    address: 99
+    update_interval: 5s
+    accuracy_decimals: 3
+    power_control_switch: ph_enable
+    rtd_sensor: rtd_sensor
+    temp_compensation_switch: ph_temp_comp_enable
+    calibration_mode_switch: ph_cal_mode_enable
+    web_server:
+      sorting_group_id: overview
+      sorting_weight: 10
+    voltage:
+      name: "pH Voltage"
+      web_server:
+        sorting_group_id: ph_circuit
+    reset_reason:
+      name: "pH Reset Reason"
+      web_server:
+        sorting_group_id: ph_circuit
+    firmware_version:
+      name: "pH Firmware Version"
+      web_server:
+        sorting_group_id: ph_circuit
+    calibration_status:
+      name: "pH Calibration Status"
+      web_server:
+        sorting_group_id: ph_cal
+    temperature_compensation:
+      name: "pH Temperature Compensation"
+      web_server:
+        sorting_group_id: temp_comp
+    on_slope:
+      - logger.log:
+          format: "[PH] Slope: %s mV/pH"
+          args: ['x.c_str()']
+    acid_slope_quality:
+      name: "pH Acid Slope Quality"
+      web_server:
+        sorting_group_id: ph_cal
+    alkaline_slope_quality:
+      name: "pH Alkaline Slope Quality"
+      web_server:
+        sorting_group_id: ph_cal
+    asymmetry_potential:
+      name: "pH Asymmetry Potential"
+      web_server:
+        sorting_group_id: ph_cal
+    current_command:
+      name: "pH Current Command"
+      web_server:
+        sorting_group_id: ph_circuit
+    next_command:
+      name: "pH Next Command"
+      web_server:
+        sorting_group_id: ph_circuit
+    last_command:
+      name: "pH Last Command"
+      web_server:
+        sorting_group_id: ph_circuit
+    queue_size:
+      name: "pH Queue Size"
+      web_server:
+        sorting_group_id: ph_circuit
+
+  - platform: ezo_types
+    type: ec
+    id: ec_sensor
+    name: "Water EC"
+    address: 100
+    update_interval: 5s
+    power_control_switch: ec_enable
+    rtd_sensor: rtd_sensor
+    temp_compensation_switch: ec_temp_comp_enable
+    calibration_mode_switch: ec_cal_mode_enable
+    web_server:
+      sorting_group_id: overview
+      sorting_weight: 30
+    cell_constant:
+      name: "EC Cell Constant"
+      web_server:
+        sorting_group_id: ec_cal
+    voltage:
+      name: "EC Voltage"
+      web_server:
+        sorting_group_id: ec_circuit
+    reset_reason:
+      name: "EC Reset Reason"
+      web_server:
+        sorting_group_id: ec_circuit
+    firmware_version:
+      name: "EC Firmware Version"
+      web_server:
+        sorting_group_id: ec_circuit
+    calibration_status:
+      name: "EC Calibration Status"
+      web_server:
+        sorting_group_id: ec_cal
+    temperature_compensation:
+      name: "EC Temperature Compensation"
+      web_server:
+        sorting_group_id: temp_comp
+    current_command:
+      name: "EC Current Command"
+      web_server:
+        sorting_group_id: ec_circuit
+    next_command:
+      name: "EC Next Command"
+      web_server:
+        sorting_group_id: ec_circuit
+    last_command:
+      name: "EC Last Command"
+      web_server:
+        sorting_group_id: ec_circuit
+    queue_size:
+      name: "EC Queue Size"
+      web_server:
+        sorting_group_id: ec_circuit
+    tds:
+      name: "Water TDS"
+      web_server:
+        sorting_group_id: ec_circuit
+    tds_conversion_factor:
+      name: "EC TDS Conversion Factor"
+      web_server:
+        sorting_group_id: ec_circuit
+
+  - platform: ezo_types
+    type: rtd
+    id: rtd_sensor
+    name: "Water Temperature"
+    address: 102
+    update_interval: 5s
+    power_control_switch: rtd_enable
+    web_server:
+      sorting_group_id: overview
+      sorting_weight: 20
+    voltage:
+      name: "RTD Voltage"
+      web_server:
+        sorting_group_id: rtd_circuit
+    reset_reason:
+      name: "RTD Reset Reason"
+      web_server:
+        sorting_group_id: rtd_circuit
+    firmware_version:
+      name: "RTD Firmware Version"
+      web_server:
+        sorting_group_id: rtd_circuit
+    calibration_status:
+      name: "RTD Calibration Status"
+      web_server:
+        sorting_group_id: rtd_cal
+    current_command:
+      name: "RTD Current Command"
+      web_server:
+        sorting_group_id: rtd_circuit
+    next_command:
+      name: "RTD Next Command"
+      web_server:
+        sorting_group_id: rtd_circuit
+    last_command:
+      name: "RTD Last Command"
+      web_server:
+        sorting_group_id: rtd_circuit
+    queue_size:
+      name: "RTD Queue Size"
+      web_server:
+        sorting_group_id: rtd_circuit
+
+  - platform: ezo_types
+    type: orp
+    id: orp_sensor
+    name: "Water ORP"
+    address: 98
+    update_interval: 5s
+    power_control_switch: aux_enable
+    web_server:
+      sorting_group_id: overview
+      sorting_weight: 40
+    voltage:
+      name: "ORP Voltage"
+      web_server:
+        sorting_group_id: orp_circuit
+    reset_reason:
+      name: "ORP Reset Reason"
+      web_server:
+        sorting_group_id: orp_circuit
+    firmware_version:
+      name: "ORP Firmware Version"
+      web_server:
+        sorting_group_id: orp_circuit
+    calibration_status:
+      name: "ORP Calibration Status"
+      web_server:
+        sorting_group_id: orp_cal
+    current_command:
+      name: "ORP Current Command"
+      web_server:
+        sorting_group_id: orp_circuit
+    next_command:
+      name: "ORP Next Command"
+      web_server:
+        sorting_group_id: orp_circuit
+    last_command:
+      name: "ORP Last Command"
+      web_server:
+        sorting_group_id: orp_circuit
+    queue_size:
+      name: "ORP Queue Size"
+      web_server:
+        sorting_group_id: orp_circuit
+    extended_scale:
+      name: "ORP Extended Scale"
+      web_server:
+        sorting_group_id: orp_circuit
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: diagnostic
+
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: diagnostic
+
+select:
+
+button:
+  # === Diagnostic: re-query the persisted state from each circuit on demand ===
+  - platform: template
+    name: "Refresh Circuit State"
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: diagnostic
+    on_press:
+      - lambda: |-
+          id(ec_sensor).request_cell_constant_query();
+          id(ec_sensor).request_tds_query();
+          id(orp_sensor).request_extended_scale_query();
+
+  # === Factory Reset ===
+  - platform: template
+    name: "pH Factory Reset"
+    web_server:
+      sorting_group_id: ph_circuit
+    on_press:
+      - lambda: 'id(ph_sensor).factory_reset();'
+
+  - platform: template
+    name: "EC Factory Reset"
+    web_server:
+      sorting_group_id: ec_circuit
+    on_press:
+      - lambda: 'id(ec_sensor).factory_reset();'
+
+  - platform: template
+    name: "RTD Factory Reset"
+    web_server:
+      sorting_group_id: rtd_circuit
+    on_press:
+      - lambda: 'id(rtd_sensor).factory_reset();'
+
+  - platform: template
+    name: "ORP Factory Reset"
+    web_server:
+      sorting_group_id: orp_circuit
+    on_press:
+      - lambda: 'id(orp_sensor).factory_reset();'
+
+  # === pH Calibration ===
+  - platform: template
+    name: "pH Cal Mid (7.00)"
+    web_server:
+      sorting_group_id: ph_cal
+    on_press:
+      - lambda: 'id(ph_sensor).set_calibration_point_mid(7.00);'
+
+  - platform: template
+    name: "pH Cal Low (4.00)"
+    web_server:
+      sorting_group_id: ph_cal
+    on_press:
+      - lambda: 'id(ph_sensor).set_calibration_point_low(4.00);'
+
+  - platform: template
+    name: "pH Cal High (10.00)"
+    web_server:
+      sorting_group_id: ph_cal
+    on_press:
+      - lambda: 'id(ph_sensor).set_calibration_point_high(10.00);'
+
+  # === EC Calibration ===
+  - platform: template
+    name: "EC Dry Calibration"
+    web_server:
+      sorting_group_id: ec_cal
+    on_press:
+      - lambda: 'id(ec_sensor).set_calibration_point_dry();'
+
+  - platform: template
+    name: "EC Cal Low (1413 µS⁄cm)"
+    web_server:
+      sorting_group_id: ec_cal
+    on_press:
+      - lambda: 'id(ec_sensor).set_calibration_point_low(1413.0);'
+
+  - platform: template
+    name: "EC Cal High (5000 µS⁄cm)"
+    web_server:
+      sorting_group_id: ec_cal
+    on_press:
+      - lambda: 'id(ec_sensor).set_calibration_point_high(5000.0);'
+
+  # === RTD Calibration ===
+  - platform: template
+    name: "RTD Calibration (25.0°C)"
+    web_server:
+      sorting_group_id: rtd_cal
+    on_press:
+      - lambda: 'id(rtd_sensor).set_calibration_generic(25.0);'
+
+  # === ORP Calibration ===
+  - platform: template
+    name: "ORP Calibration (400 mV)"
+    web_server:
+      sorting_group_id: orp_cal
+    on_press:
+      - lambda: 'id(orp_sensor).set_calibration_generic(400.0);'
+
+  # === Clear Calibration ===
+  - platform: template
+    name: "pH Clear Calibration"
+    web_server:
+      sorting_group_id: ph_cal
+    on_press:
+      - lambda: 'id(ph_sensor).clear_calibration();'
+
+  - platform: template
+    name: "EC Clear Calibration"
+    web_server:
+      sorting_group_id: ec_cal
+    on_press:
+      - lambda: 'id(ec_sensor).clear_calibration();'
+
+  - platform: template
+    name: "RTD Clear Calibration"
+    web_server:
+      sorting_group_id: rtd_cal
+    on_press:
+      - lambda: 'id(rtd_sensor).clear_calibration();'
+
+  - platform: template
+    name: "ORP Clear Calibration"
+    web_server:
+      sorting_group_id: orp_cal
+    on_press:
+      - lambda: 'id(orp_sensor).clear_calibration();'
+
+  # === System Control ===
+  - platform: restart
+    name: "Restart Device"
+
+number:
+
+switch:
+  # === Circuit Power Control ===
+  # Truth table for enable pins of sensor ports
+  # +--------+--------+--------+----------------+
+  # | Sensor | GPIO   | State  | Sensor Power   |
+  # +--------+--------+--------+----------------+
+  # | pH     | GPIO12 | LOW    | ON             |
+  # | EC     | GPIO27 | LOW    | ON             |
+  # | ORP    | GPIO33 | LOW    | ON             |
+  # | RTD    | GPIO15 | HIGH   | ON             |
+  # +--------+--------+--------+----------------+
+  - platform: gpio
+    pin:
+      number: GPIO12
+      inverted: true
+    name: "Enable pH Circuit"
+    id: ph_enable
+    web_server:
+      sorting_group_id: ph_circuit
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: gpio
+    pin:
+      number: GPIO27
+      inverted: true
+    name: "Enable EC Circuit"
+    id: ec_enable
+    web_server:
+      sorting_group_id: ec_circuit
+    restore_mode: RESTORE_DEFAULT_ON
+
+  # Slot 4 = AUX (general-purpose port); currently hosts the ORP circuit.
+  - platform: gpio
+    pin:
+      number: GPIO33
+      inverted: true
+    name: "Enable AUX Circuit"
+    id: aux_enable
+    web_server:
+      sorting_group_id: orp_circuit
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: gpio
+    pin:
+      number: GPIO15
+      inverted: false
+    name: "Enable RTD Circuit"
+    id: rtd_enable
+    web_server:
+      sorting_group_id: rtd_circuit
+    restore_mode: RESTORE_DEFAULT_ON
+
+  # === Temperature Compensation Control ===
+  - platform: template
+    name: "pH Temperature Compensation"
+    id: ph_temp_comp_enable
+    optimistic: true
+    web_server:
+      sorting_group_id: temp_comp
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    name: "EC Temperature Compensation"
+    id: ec_temp_comp_enable
+    optimistic: true
+    web_server:
+      sorting_group_id: temp_comp
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # === Calibration Mode Control ===
+  - platform: template
+    name: "pH Calibration Mode"
+    id: ph_cal_mode_enable
+    optimistic: true
+    web_server:
+      sorting_group_id: ph_cal
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    name: "EC Calibration Mode"
+    id: ec_cal_mode_enable
+    optimistic: true
+    web_server:
+      sorting_group_id: ec_cal
+    restore_mode: RESTORE_DEFAULT_OFF
