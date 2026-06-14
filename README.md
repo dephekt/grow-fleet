@@ -24,8 +24,9 @@ python3 scripts/publish_packages.py atlas-hydro-kit
 The release workflow packages compiled firmware as `dist/<device>/<device>.ota.bin`,
 `dist/<device>/<device>.factory.bin`, and `dist/<device>/<device>.manifest.json`.
 Publishing uses the Forgejo generic package API with `PACKAGE_TOKEN` or
-`FORGEJO_TOKEN`, authenticates as `PACKAGE_AUTH_USER` when set, and defaults to
-the `stackdrift` package namespace.
+`FORGEJO_TOKEN`, uses Basic auth for `PACKAGE_TOKEN`, uses Bearer auth for the
+automatic `FORGEJO_TOKEN`, and defaults to the `stackdrift` package namespace.
+`PACKAGE_AUTH_USER` only applies to `PACKAGE_TOKEN` publishing.
 
 Workflow behavior:
 
