@@ -1,0 +1,113 @@
+name: firmware
+
+on:
+  pull_request:
+    paths:
+      - "assets/**"
+      - "devices/**"
+      - "fleet.yaml"
+      - "scripts/**"
+      - ".forgejo/workflows/firmware.yml"
+  push:
+    branches:
+      - main
+    tags:
+      - "firmware/*/v*"
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Optional device to compile"
+        required: false
+        type: string
+
+jobs:
+  pr_prepare:
+    if: github.event_name == 'pull_request'
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_devices: ${{ steps.matrix.outputs.has_devices }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: matrix
+        run: |
+          MATRIX="$(python3 scripts/impacted_devices.py --base '${{ github.event.pull_request.base.sha }}' --head '${{ github.event.pull_request.head.sha }}' --matrix)"
+          HAS_DEVICES="$(MATRIX="$MATRIX" python3 -c 'import json, os; payload = json.loads(os.environ["MATRIX"]); print("true" if payload.get("include") else "false")')"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "has_devices=$HAS_DEVICES" >> "$GITHUB_OUTPUT"
+
+  pr_compile:
+    if: github.event_name == 'pull_request' && needs.pr_prepare.outputs.has_devices == 'true'
+    needs: pr_prepare
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    strategy:
+      matrix: ${{ fromJson(needs.pr_prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compile impacted device
+        run: python3 scripts/compile_devices.py "${{ matrix.device }}"
+
+  main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compile all devices
+        run: python3 scripts/compile_devices.py --all
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/firmware/')
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: meta
+        run: |
+          tag="$GITHUB_REF_NAME"
+          rest="${tag#firmware/}"
+          device="${rest%%/v*}"
+          version="${tag#firmware/$device/}"
+          echo "device=$device" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Compile release device
+        run: python3 scripts/compile_devices.py "${{ steps.meta.outputs.device }}"
+      - name: Package release device
+        run: python3 scripts/package_device.py "${{ steps.meta.outputs.device }}" --version "${{ steps.meta.outputs.version }}" --source-sha "${{ github.sha }}"
+      - name: Publish release device
+        env:
+          PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: python3 scripts/publish_packages.py "${{ steps.meta.outputs.device }}"
+
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: stackdrift
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compile requested devices
+        run: |
+          if [ -n "${{ inputs.device }}" ]; then
+            python3 scripts/compile_devices.py "${{ inputs.device }}"
+          else
+            python3 scripts/compile_devices.py --all
+          fi

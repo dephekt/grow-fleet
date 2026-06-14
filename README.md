@@ -5,3 +5,30 @@ ESPHome firmware configurations for the stackdrift grow controller fleet.
 This repository owns real device YAMLs, firmware compile CI, and release
 artifacts for site-local OTA workflows. Reusable ESPHome components remain in
 [`stackdrift/esphome-components`](https://codeberg.org/stackdrift/esphome-components).
+
+## CI Tooling
+
+The CI slice in this repo is driven by the scripts under `scripts/` and the
+Forgejo workflow at `.forgejo/workflows/firmware.yml`.
+
+Common local commands:
+
+```sh
+python3 scripts/list_devices.py
+python3 scripts/impacted_devices.py --base <base-sha> --head <head-sha>
+python3 scripts/compile_devices.py --all
+python3 scripts/package_device.py atlas-hydro-kit --version v1.2.3
+python3 scripts/publish_packages.py atlas-hydro-kit
+```
+
+The release workflow packages compiled firmware as `dist/<device>/<device>.ota.bin`,
+`dist/<device>/<device>.factory.bin`, and `dist/<device>/<device>.manifest.json`.
+Publishing uses the Forgejo generic package API with `PACKAGE_TOKEN` or
+`FORGEJO_TOKEN`, authenticates as `PACKAGE_AUTH_USER` when set, and defaults to
+the `stackdrift` package namespace.
+
+Workflow behavior:
+
+- Pull requests compile only impacted devices.
+- Pushes to `main` compile every device.
+- Tags matching `firmware/<device>/vX.Y.Z` compile, package, and publish that one device.
