@@ -302,6 +302,8 @@ scd4x_stats:
   vpd:
     name: "VPD"
     id: vpd_sensor
+    unit_of_measurement: "kPa"
+    accuracy_decimals: 2
     web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 40 }
   daily_max_co2:
     name: "Daily Max CO2"
