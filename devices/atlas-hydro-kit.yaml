@@ -65,15 +65,15 @@ mqtt:
             "schema": "grow-ui.v1",
             "nodeId": "atlas-hydro-monitor",
             "groups": [
-              { "id": "overview", "title": "At a Glance", "order": 10, "variant": "metrics", "defaultOpen": true },
-              { "id": "controls", "title": "Circuit Controls", "order": 20, "defaultOpen": true },
-              { "id": "temp_comp", "title": "Temperature Compensation", "order": 25, "defaultOpen": true },
-              { "id": "ph_cal", "title": "pH Calibration", "order": 30, "defaultOpen": false },
-              { "id": "ec_cal", "title": "EC Calibration", "order": 40, "defaultOpen": false },
-              { "id": "rtd_cal", "title": "RTD Calibration", "order": 50, "defaultOpen": false },
-              { "id": "orp_cal", "title": "ORP Calibration", "order": 60, "defaultOpen": false },
-              { "id": "maintenance", "title": "Maintenance", "order": 80, "defaultOpen": false },
-              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "defaultOpen": false }
+              { "id": "overview", "title": "At a Glance", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "controls", "title": "Circuit Controls", "order": 20, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "temp_comp", "title": "Temperature Compensation", "order": 25, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "ph_cal", "title": "pH Calibration", "order": 30, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
+              { "id": "ec_cal", "title": "EC Calibration", "order": 40, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
+              { "id": "rtd_cal", "title": "RTD Calibration", "order": 50, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
+              { "id": "orp_cal", "title": "ORP Calibration", "order": 60, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
             ],
             "entities": [
               { "component": "sensor", "objectId": "water_temperature", "group": "overview", "role": "metric", "order": 10, "label": "Water Temp" },

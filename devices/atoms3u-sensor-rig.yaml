@@ -82,11 +82,11 @@ mqtt:
             "schema": "grow-ui.v1",
             "nodeId": "atoms3u-sensor-rig",
             "groups": [
-              { "id": "overview", "title": "Environment", "order": 10, "variant": "metrics", "defaultOpen": true },
-              { "id": "thresholds", "title": "Thresholds & Alerts", "order": 20, "defaultOpen": true },
-              { "id": "thermal", "title": "Thermal Camera", "order": 30, "defaultOpen": false },
-              { "id": "maintenance", "title": "Maintenance", "order": 80, "defaultOpen": false },
-              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "defaultOpen": false }
+              { "id": "overview", "title": "Environment", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "thresholds", "title": "Thresholds & Alerts", "order": 20, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
+              { "id": "thermal", "title": "Thermal Camera", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
             ],
             "entities": [
               { "component": "sensor", "objectId": "co2", "group": "overview", "role": "metric", "order": 10 },
