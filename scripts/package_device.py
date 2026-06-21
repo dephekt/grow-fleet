@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fleetlib import (
+    assert_flashable_secrets,
     capture,
     device_spec,
     esphome_version,
@@ -99,7 +100,15 @@ def release_url(device: str, channel: str, version: str, source_sha: str) -> str
     return f"https://codeberg.org/stackdrift/grow-fleet/src/commit/{source_sha}"
 
 
-def package_device(name: str, version: str, source_sha: str, dist_root: Path, channel: str | None = None) -> Path:
+def package_device(
+    name: str,
+    version: str,
+    source_sha: str,
+    dist_root: Path,
+    channel: str | None = None,
+    build_profile: str = "site-private",
+    flashable: bool = True,
+) -> Path:
     spec = device_spec(name)
     resolved_channel = channel or firmware_channel(version)
     artifacts = firmware_artifacts(name)
@@ -123,6 +132,8 @@ def package_device(name: str, version: str, source_sha: str, dist_root: Path, ch
     manifest = {
         "schema": "grow-firmware-package.v1",
         "channel": resolved_channel,
+        "build_profile": build_profile,
+        "flashable": flashable,
         "device": name,
         "node_id": spec.node_id,
         "project_name": spec.project_name,
@@ -170,10 +181,32 @@ def main() -> None:
         default="dist",
         help="Directory to write packaged artifacts into.",
     )
+    parser.add_argument(
+        "--build-profile",
+        default="site-private",
+        choices=["site-private", "ci-placeholder"],
+        help="Secret/build profile recorded in the manifest.",
+    )
+    parser.add_argument(
+        "--require-flashable-secrets",
+        action="store_true",
+        help="Reject packaging if devices/secrets.yaml still contains compile-only placeholder values.",
+    )
     args = parser.parse_args()
 
+    if args.require_flashable_secrets:
+        assert_flashable_secrets()
+
     source_sha = args.source_sha or capture(["git", "rev-parse", "HEAD"])
-    manifest_path = package_device(args.device, args.version, source_sha, Path(args.dist_root), channel=args.channel)
+    manifest_path = package_device(
+        args.device,
+        args.version,
+        source_sha,
+        Path(args.dist_root),
+        channel=args.channel,
+        build_profile=args.build_profile,
+        flashable=args.build_profile == "site-private",
+    )
     print(manifest_path)
 
 

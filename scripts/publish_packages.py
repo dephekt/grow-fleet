@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_PACKAGE_USER = "stackdrift"
+PRIVATE_PACKAGE_USER = "stackdrift-firmware"
 PACKAGE_LIST_PAGE_SIZE = 50
 EDGE_VERSION_RE = re.compile(r"^edge-(?P<created>\d{8}T\d{6}Z)-(?P<sha>[0-9a-f]{7,40})$")
 
@@ -72,8 +73,12 @@ def publish_device(
         raise FileNotFoundError(f"missing manifest: {manifest_path}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("flashable") is not True:
+        raise ValueError(f"refusing to publish non-flashable manifest: {manifest_path}")
     package = manifest["package"]
     version = manifest["version"]
+
+    preflight_package_access(base_url, auth_user, token, auth_scheme, package_user, package)
 
     for filename in manifest["artifact_filenames"] + [manifest_path.name]:
         upload_file(
@@ -108,11 +113,19 @@ def list_generic_packages(
     package_user: str,
     package: str,
     page_size: int = PACKAGE_LIST_PAGE_SIZE,
+    auth_user: str | None = None,
+    token: str | None = None,
+    auth_scheme: str = "basic",
 ) -> list[dict[str, object]]:
     packages: list[dict[str, object]] = []
     page = 1
     while True:
-        request = Request(package_list_url(base_url, package_user, package, page, page_size), method="GET")
+        headers = {}
+        if token:
+            if not auth_user:
+                raise ValueError("auth_user is required when token is provided")
+            headers["Authorization"] = authorization_header(auth_user, token, auth_scheme)
+        request = Request(package_list_url(base_url, package_user, package, page, page_size), method="GET", headers=headers)
         with urlopen(request) as response:
             payload = json.loads(response.read().decode("utf-8"))
             link_header = response.headers.get("Link")
@@ -127,6 +140,24 @@ def list_generic_packages(
             break
         page += 1
     return packages
+
+
+def preflight_package_access(
+    base_url: str,
+    auth_user: str,
+    token: str,
+    auth_scheme: str,
+    package_user: str,
+    package: str,
+) -> None:
+    list_generic_packages(
+        base_url,
+        package_user,
+        package,
+        auth_user=auth_user,
+        token=token,
+        auth_scheme=auth_scheme,
+    )
 
 
 def edge_cleanup_candidates(versions: list[str], keep: int) -> list[str]:
@@ -170,7 +201,14 @@ def prune_edge_packages(
     package: str,
     keep: int,
 ) -> list[str]:
-    packages = list_generic_packages(base_url, package_user, package)
+    packages = list_generic_packages(
+        base_url,
+        package_user,
+        package,
+        auth_user=auth_user,
+        token=token,
+        auth_scheme=auth_scheme,
+    )
     versions = [str(item["version"]) for item in packages if "version" in item]
     candidates = edge_cleanup_candidates(versions, keep)
     for version in candidates:
@@ -194,8 +232,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--auth-user",
-        default=os.environ.get("PACKAGE_AUTH_USER") or os.environ.get("PACKAGE_USER", DEFAULT_PACKAGE_USER),
-        help="Forgejo username for Basic auth. Defaults to PACKAGE_AUTH_USER, then PACKAGE_USER.",
+        default=os.environ.get("PACKAGE_AUTH_USER"),
+        help="Forgejo username for Basic auth. Required when PACKAGE_USER is an org.",
+    )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Validate package namespace access from existing manifests without uploading artifacts.",
     )
     parser.add_argument(
         "--prune-edge",
@@ -216,14 +259,35 @@ def main() -> None:
     if not token:
         raise SystemExit("PACKAGE_TOKEN or FORGEJO_TOKEN is required")
     auth_scheme = "basic" if package_token else "bearer"
+    auth_user = args.auth_user
+    if package_token and not auth_user:
+        if args.package_user != DEFAULT_PACKAGE_USER:
+            raise SystemExit("PACKAGE_AUTH_USER is required when publishing to an org package namespace")
+        auth_user = args.package_user
+    if package_token and args.package_user == PRIVATE_PACKAGE_USER and auth_user == args.package_user:
+        raise SystemExit("PACKAGE_AUTH_USER must be the PAT-owning user, not stackdrift-firmware")
+    if not auth_user:
+        auth_user = args.package_user
 
     dist_root = Path(args.dist_root)
     for device in args.devices:
+        if args.preflight_only:
+            manifest_path = dist_root / device / f"{device}.manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            preflight_package_access(
+                args.base_url,
+                auth_user,
+                token,
+                auth_scheme,
+                args.package_user,
+                str(manifest["package"]),
+            )
+            continue
         publish_device(
             dist_root,
             device,
             args.package_user,
-            args.auth_user,
+            auth_user,
             token,
             auth_scheme,
             args.base_url,
@@ -233,7 +297,7 @@ def main() -> None:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             removed = prune_edge_packages(
                 args.base_url,
-                args.auth_user,
+                auth_user,
                 token,
                 auth_scheme,
                 args.package_user,

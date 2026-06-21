@@ -18,6 +18,8 @@ substitutions:
   friendlyname: "AtomS3U Sensor Rig"
   firmware_version: dev
   grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
 
 esphome:
   name: ${devicename}
@@ -63,7 +65,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: "Firmware Update"
-    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
 
 wifi:
   ssid: !secret wifi_ssid
@@ -88,15 +90,17 @@ mqtt:
     topic: grow/daniel-home/atoms3u-sensor-rig/debug
     level: NONE
   on_connect:
+    - delay: 2s
     - mqtt.publish:
         topic: grow/daniel-home/atoms3u-sensor-rig/_firmware/config
         retain: true
+        qos: 1
         payload: |-
           {
             "schema": "grow-firmware-device.v1",
             "nodeId": "atoms3u-sensor-rig",
             "projectName": "stackdrift.atoms3u-sensor-rig",
-            "packageOwner": "stackdrift",
+            "packageOwner": "${package_owner}",
             "package": "atoms3u-sensor-rig",
             "device": "atoms3u-sensor-rig",
             "chipFamily": "ESP32-S3",
@@ -106,6 +110,7 @@ mqtt:
     - mqtt.publish:
         topic: grow/daniel-home/atoms3u-sensor-rig/_ui/config
         retain: true
+        qos: 1
         payload: |-
           {
             "schema": "grow-ui.v1",

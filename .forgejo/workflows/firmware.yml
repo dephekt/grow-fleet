@@ -3,6 +3,7 @@ name: firmware
 env:
   FIRMWARE_CACHE_ROOT: /runner-cache/grow-fleet
   PLATFORMIO_CORE_DIR: /runner-cache/grow-fleet/platformio
+  PACKAGE_USER: stackdrift-firmware
 
 on:
   pull_request:
@@ -102,7 +103,9 @@ jobs:
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
           git checkout --detach "$sha"
       - name: Compile impacted device
-        run: python3 scripts/compile_devices.py "${{ matrix.device }}"
+        run: |
+          rm -f devices/secrets.yaml
+          python3 scripts/compile_devices.py "${{ matrix.device }}"
 
   main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -146,11 +149,12 @@ jobs:
           output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
           echo "sha=$sha" >> "$output_path"
           echo "version=$version" >> "$output_path"
+      - name: Install protected firmware secrets
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: python3 scripts/install_firmware_secrets.py --require-flashable
       - name: Compile release devices for edge
         run: python3 scripts/compile_devices.py --all --release-only --firmware-version "${{ steps.edge_meta.outputs.version }}"
-      - name: Store firmware cache
-        run: |
-          python3 scripts/cache_firmware.py store --sha "${{ steps.edge_meta.outputs.sha }}" --all --release-only
       - name: Package edge devices
         run: |
           devices="$(python3 scripts/list_devices.py --release-only)"
@@ -158,17 +162,18 @@ jobs:
             python3 scripts/package_device.py "$device" \
               --version "${{ steps.edge_meta.outputs.version }}" \
               --channel edge \
-              --source-sha "${{ steps.edge_meta.outputs.sha }}"
+              --source-sha "${{ steps.edge_meta.outputs.sha }}" \
+              --build-profile site-private \
+              --require-flashable-secrets
           done
       - name: Publish edge devices
         env:
+          PACKAGE_USER: stackdrift-firmware
           PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
           PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
         run: |
           devices="$(python3 scripts/list_devices.py --release-only)"
           python3 scripts/publish_packages.py --prune-edge --keep-edge 10 $devices
-      - name: Prune firmware cache
-        run: python3 scripts/cache_firmware.py prune --max-age-days 30 --keep-shas 10
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/firmware/')
@@ -214,38 +219,23 @@ jobs:
           echo "device=$device" >> "$output_path"
           echo "version=$version" >> "$output_path"
           echo "sha=$sha" >> "$output_path"
-      - id: firmware_cache
-        name: Restore cached release firmware
-        run: |
-          set +e
-          python3 scripts/cache_firmware.py restore \
-            --sha "${{ steps.meta.outputs.sha }}" \
-            --wait-seconds 60 \
-            "${{ steps.meta.outputs.device }}"
-          status="$?"
-          set -e
-          output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
-          if [ "$status" -eq 0 ]; then
-            echo "hit=true" >> "$output_path"
-          elif [ "$status" -eq 1 ]; then
-            echo "hit=false" >> "$output_path"
-          else
-            exit "$status"
-          fi
+      - name: Install protected firmware secrets
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: python3 scripts/install_firmware_secrets.py --require-flashable
       - name: Compile release device
-        if: steps.firmware_cache.outputs.hit != 'true'
         run: python3 scripts/compile_devices.py "${{ steps.meta.outputs.device }}" --firmware-version "${{ steps.meta.outputs.version }}"
-      - name: Store release firmware cache
-        if: steps.firmware_cache.outputs.hit != 'true'
-        run: python3 scripts/cache_firmware.py store --sha "${{ steps.meta.outputs.sha }}" "${{ steps.meta.outputs.device }}"
       - name: Package release device
         run: |
           python3 scripts/package_device.py "${{ steps.meta.outputs.device }}" \
             --version "${{ steps.meta.outputs.version }}" \
             --channel stable \
-            --source-sha "${{ steps.meta.outputs.sha }}"
+            --source-sha "${{ steps.meta.outputs.sha }}" \
+            --build-profile site-private \
+            --require-flashable-secrets
       - name: Publish release device
         env:
+          PACKAGE_USER: stackdrift-firmware
           PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
           PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
         run: python3 scripts/publish_packages.py "${{ steps.meta.outputs.device }}"
@@ -285,6 +275,7 @@ jobs:
           git checkout --detach "$sha"
       - name: Compile requested devices
         run: |
+          rm -f devices/secrets.yaml
           if [ -n "${{ inputs.device }}" ]; then
             python3 scripts/compile_devices.py "${{ inputs.device }}"
           else
