@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,6 +16,17 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 FLEET_PATH = ROOT / "fleet.yaml"
+CI_SECRETS_PATH = ROOT / "ci/secrets.yaml"
+DEVICE_SECRETS_PATH = ROOT / "devices/secrets.yaml"
+REQUIRED_FLASHABLE_SECRET_KEYS = (
+    "api_encryption_key",
+    "fallback_hotspot_key",
+    "firmware_update_token",
+    "hydro_monitor_ota_key",
+    "mqtt_password",
+    "wifi_password",
+    "wifi_ssid",
+)
 
 
 @dataclass(frozen=True)
@@ -151,13 +163,55 @@ def esphome_version() -> str:
     raise RuntimeError("unable to determine ESPHome version")
 
 
-def ensure_secrets_link() -> None:
-    source = ROOT / "ci/secrets.yaml"
-    target = ROOT / "devices/secrets.yaml"
-    if target.exists() or not source.exists():
+def ensure_secrets_link(source: Path | None = None) -> None:
+    selected_source = source
+    if selected_source is None:
+        env_source = os.environ.get("FLEET_SECRETS_PATH")
+        selected_source = Path(env_source) if env_source else CI_SECRETS_PATH
+
+    target = DEVICE_SECRETS_PATH
+    if target.exists() or not selected_source.exists():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    shutil.copy2(selected_source, target)
+
+
+def secret_values(path: Path = DEVICE_SECRETS_PATH) -> dict[str, str]:
+    if not path.exists():
+        raise FileNotFoundError(f"secrets file not found: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    if not isinstance(data, dict):
+        raise ValueError(f"secrets file must contain a mapping: {path}")
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def flashable_secret_problems(
+    secrets_path: Path = DEVICE_SECRETS_PATH,
+    placeholder_path: Path = CI_SECRETS_PATH,
+) -> list[str]:
+    secrets = secret_values(secrets_path)
+    placeholders = secret_values(placeholder_path) if placeholder_path.exists() else {}
+    problems: list[str] = []
+
+    for key in REQUIRED_FLASHABLE_SECRET_KEYS:
+        value = secrets.get(key)
+        if value is None or value == "":
+            problems.append(f"missing required secret: {key}")
+            continue
+        if placeholders.get(key) == value:
+            problems.append(f"secret still has compile-only placeholder value: {key}")
+
+    return problems
+
+
+def assert_flashable_secrets(
+    secrets_path: Path = DEVICE_SECRETS_PATH,
+    placeholder_path: Path = CI_SECRETS_PATH,
+) -> None:
+    problems = flashable_secret_problems(secrets_path, placeholder_path)
+    if problems:
+        raise ValueError("firmware secrets are not flashable: " + "; ".join(problems))
 
 
 def changed_paths(base: str | None = None, head: str | None = None) -> list[str]:

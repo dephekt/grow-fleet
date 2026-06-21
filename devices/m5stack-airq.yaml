@@ -30,6 +30,8 @@ substitutions:
   friendlyname: "M5Stack AirQ"
   firmware_version: dev
   grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
   sensor_interval: 60s   # SCD40/SEN55 poll + e-ink refresh cadence
 
 esphome:
@@ -81,7 +83,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: "Firmware Update"
-    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
 
 captive_portal:
 wifi:
@@ -103,15 +105,17 @@ mqtt:
     topic: grow/daniel-home/m5stack-airq/debug
     level: NONE
   on_connect:
+    - delay: 2s
     - mqtt.publish:
         topic: grow/daniel-home/m5stack-airq/_firmware/config
         retain: true
+        qos: 1
         payload: |-
           {
             "schema": "grow-firmware-device.v1",
             "nodeId": "m5stack-airq",
             "projectName": "stackdrift.m5stack-airq",
-            "packageOwner": "stackdrift",
+            "packageOwner": "${package_owner}",
             "package": "m5stack-airq",
             "device": "m5stack-airq",
             "chipFamily": "ESP32-S3",

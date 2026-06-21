@@ -4,6 +4,8 @@ substitutions:
   device_mac: "atlas01"
   firmware_version: dev
   grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
 
 esphome:
   name: ${devicename}
@@ -28,7 +30,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: "Firmware Update"
-    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
 
 api:
   encryption:
@@ -73,15 +75,17 @@ mqtt:
     topic: grow/daniel-home/atlas-hydro-monitor/debug
     level: NONE
   on_connect:
+    - delay: 2s
     - mqtt.publish:
         topic: grow/daniel-home/atlas-hydro-monitor/_firmware/config
         retain: true
+        qos: 1
         payload: |-
           {
             "schema": "grow-firmware-device.v1",
             "nodeId": "atlas-hydro-monitor",
             "projectName": "stackdrift.atlas-hydro-kit",
-            "packageOwner": "stackdrift",
+            "packageOwner": "${package_owner}",
             "package": "atlas-hydro-kit",
             "device": "atlas-hydro-kit",
             "chipFamily": "ESP32",
@@ -91,6 +95,7 @@ mqtt:
     - mqtt.publish:
         topic: grow/daniel-home/atlas-hydro-monitor/_ui/config
         retain: true
+        qos: 1
         payload: |-
           {
             "schema": "grow-ui.v1",

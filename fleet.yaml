@@ -12,7 +12,7 @@ devices:
     node_id: atlas-hydro-monitor
     project_name: stackdrift.atlas-hydro-kit
     package: atlas-hydro-kit
-    package_owner: stackdrift
+    package_owner: stackdrift-firmware
     chip_family: ESP32
     release: true
     component_dependency: *stackdrift_esphome_components
@@ -22,7 +22,7 @@ devices:
     node_id: atoms3u-sensor-rig
     project_name: stackdrift.atoms3u-sensor-rig
     package: atoms3u-sensor-rig
-    package_owner: stackdrift
+    package_owner: stackdrift-firmware
     chip_family: ESP32-S3
     release: true
     assets:
@@ -34,7 +34,7 @@ devices:
     node_id: m5stack-airq
     project_name: stackdrift.m5stack-airq
     package: m5stack-airq
-    package_owner: stackdrift
+    package_owner: stackdrift-firmware
     chip_family: ESP32-S3
     release: true
     component_dependency: *stackdrift_esphome_components
