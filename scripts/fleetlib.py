@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -21,7 +22,11 @@ class DeviceSpec:
     name: str
     config: Path
     esphome_name: str
+    node_id: str
+    project_name: str
+    package_owner: str
     package: str
+    chip_family: str
     release: bool
     assets: tuple[Path, ...]
 
@@ -60,7 +65,11 @@ def iter_device_specs() -> list[DeviceSpec]:
                 name=name,
                 config=ROOT / str(raw["config"]),
                 esphome_name=str(raw["esphome_name"]),
+                node_id=str(raw.get("node_id", raw["esphome_name"])),
+                project_name=str(raw.get("project_name", f"stackdrift.{raw['package']}")),
+                package_owner=str(raw.get("package_owner", "stackdrift")),
                 package=str(raw["package"]),
+                chip_family=str(raw["chip_family"]),
                 release=bool(raw.get("release", False)),
                 assets=assets,
             )
@@ -82,6 +91,14 @@ def device_names(release_only: bool = False) -> list[str]:
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def md5_file(path: Path) -> str:
+    digest = hashlib.md5(usedforsecurity=False)
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -180,3 +197,35 @@ def impacted_devices(paths: Iterable[str]) -> list[str]:
 
 def matrix_payload(devices: Iterable[str]) -> str:
     return json.dumps({"include": [{"device": device} for device in devices]})
+
+
+STABLE_VERSION_RE = re.compile(r"^v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)$")
+EDGE_VERSION_RE = re.compile(r"^edge-(?P<created>\d{8}T\d{6}Z)-(?P<sha>[0-9a-f]{7,40})$")
+
+
+def stable_version_key(version: str) -> tuple[int, int, int] | None:
+    match = STABLE_VERSION_RE.fullmatch(version)
+    if not match:
+        return None
+    return (int(match.group("major")), int(match.group("minor")), int(match.group("patch")))
+
+
+def is_edge_version(version: str) -> bool:
+    return EDGE_VERSION_RE.fullmatch(version) is not None
+
+
+def firmware_channel(version: str) -> str:
+    if stable_version_key(version) is not None:
+        return "stable"
+    if is_edge_version(version):
+        return "edge"
+    raise ValueError(f"unsupported firmware version format: {version}")
+
+
+def edge_version(created_utc: str, source_sha: str) -> str:
+    if not re.fullmatch(r"\d{8}T\d{6}Z", created_utc):
+        raise ValueError(f"edge timestamp must be YYYYMMDDTHHMMSSZ: {created_utc}")
+    short_sha = source_sha[:12]
+    if not re.fullmatch(r"[0-9a-f]{7,40}", short_sha):
+        raise ValueError(f"source sha must be lowercase hex: {source_sha}")
+    return f"edge-{created_utc}-{short_sha}"

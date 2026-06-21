@@ -1,9 +1,16 @@
 substitutions:
+  devicename: atlas-hydro-monitor
+  friendlyname: "Atlas Hydro Monitor"
   device_mac: "atlas01"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
 
 esphome:
-  name: atlas-hydro-monitor
-  friendly_name: Atlas Hydro Monitor
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.atlas-hydro-kit
+    version: ${firmware_version}
 
 esp32:
   board: featheresp32
@@ -13,6 +20,15 @@ esp32:
 ota:
   - platform: esphome
     password: !secret hydro_monitor_ota_key
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
 
 api:
   encryption:
@@ -57,6 +73,21 @@ mqtt:
     topic: grow/daniel-home/atlas-hydro-monitor/debug
     level: NONE
   on_connect:
+    - mqtt.publish:
+        topic: grow/daniel-home/atlas-hydro-monitor/_firmware/config
+        retain: true
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "atlas-hydro-monitor",
+            "projectName": "stackdrift.atlas-hydro-kit",
+            "packageOwner": "stackdrift",
+            "package": "atlas-hydro-kit",
+            "device": "atlas-hydro-kit",
+            "chipFamily": "ESP32",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/atlas-hydro-monitor/manifest"
+          }
     - mqtt.publish:
         topic: grow/daniel-home/atlas-hydro-monitor/_ui/config
         retain: true
@@ -451,6 +482,15 @@ sensor:
 select:
 
 button:
+  - platform: template
+    name: "Check Firmware Update"
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+
   # === Diagnostic: re-query the persisted state from each circuit on demand ===
   - platform: template
     name: "Refresh Circuit State"

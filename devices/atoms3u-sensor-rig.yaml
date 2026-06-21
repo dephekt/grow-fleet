@@ -16,10 +16,15 @@
 substitutions:
   devicename: atoms3u-sensor-rig
   friendlyname: "AtomS3U Sensor Rig"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
 
 esphome:
   name: ${devicename}
   friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.atoms3u-sensor-rig
+    version: ${firmware_version}
   libraries:
     - Wire          # mlx90640 includes <Wire.h>
 
@@ -50,6 +55,15 @@ api:
 
 ota:
   - platform: esphome
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
 
 wifi:
   ssid: !secret wifi_ssid
@@ -74,6 +88,21 @@ mqtt:
     topic: grow/daniel-home/atoms3u-sensor-rig/debug
     level: NONE
   on_connect:
+    - mqtt.publish:
+        topic: grow/daniel-home/atoms3u-sensor-rig/_firmware/config
+        retain: true
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "atoms3u-sensor-rig",
+            "projectName": "stackdrift.atoms3u-sensor-rig",
+            "packageOwner": "stackdrift",
+            "package": "atoms3u-sensor-rig",
+            "device": "atoms3u-sensor-rig",
+            "chipFamily": "ESP32-S3",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/atoms3u-sensor-rig/manifest"
+          }
     - mqtt.publish:
         topic: grow/daniel-home/atoms3u-sensor-rig/_ui/config
         retain: true
@@ -431,6 +460,13 @@ switch:
     internal: true
 
 button:
+  - platform: template
+    name: "Check Firmware Update"
+    entity_category: diagnostic
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 50 }
+    on_press:
+      - update.check:
+          id: firmware_update
   - platform: restart
     name: "Restart"
     web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }

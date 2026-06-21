@@ -80,7 +80,7 @@ def select_devices(args: argparse.Namespace) -> list[str]:
     if args.all and args.devices:
         raise ValueError("pass --all or explicit devices, not both")
     if args.all:
-        return device_names(release_only=False)
+        return device_names(release_only=args.release_only)
     if not args.devices:
         raise ValueError("pass --all or at least one device")
     for device in args.devices:
@@ -187,6 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     store_parser = subparsers.add_parser("store", help="Store compiled firmware in the cache.")
     store_parser.add_argument("--sha", required=True, help="Commit SHA cache key.")
     store_parser.add_argument("--all", action="store_true", help="Store all devices.")
+    store_parser.add_argument("--release-only", action="store_true", help="Store only release devices when using --all.")
     store_parser.add_argument("devices", nargs="*", help="Devices to store.")
 
     restore_parser = subparsers.add_parser("restore", help="Restore compiled firmware from the cache.")
