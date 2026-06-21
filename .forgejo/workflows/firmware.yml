@@ -137,12 +137,36 @@ jobs:
           git remote add origin "$repo_url"
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
           git checkout --detach "$sha"
-      - name: Compile all devices
-        run: python3 scripts/compile_devices.py --all
-      - name: Store firmware cache
+      - id: edge_meta
+        name: Build edge firmware metadata
         run: |
           sha="$(git rev-parse HEAD)"
-          python3 scripts/cache_firmware.py store --sha "$sha" --all
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          version="edge-$(date -u +%Y%m%dT%H%M%SZ)-$short_sha"
+          output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
+          echo "sha=$sha" >> "$output_path"
+          echo "version=$version" >> "$output_path"
+      - name: Compile release devices for edge
+        run: python3 scripts/compile_devices.py --all --release-only --firmware-version "${{ steps.edge_meta.outputs.version }}"
+      - name: Store firmware cache
+        run: |
+          python3 scripts/cache_firmware.py store --sha "${{ steps.edge_meta.outputs.sha }}" --all --release-only
+      - name: Package edge devices
+        run: |
+          devices="$(python3 scripts/list_devices.py --release-only)"
+          for device in $devices; do
+            python3 scripts/package_device.py "$device" \
+              --version "${{ steps.edge_meta.outputs.version }}" \
+              --channel edge \
+              --source-sha "${{ steps.edge_meta.outputs.sha }}"
+          done
+      - name: Publish edge devices
+        env:
+          PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+        run: |
+          devices="$(python3 scripts/list_devices.py --release-only)"
+          python3 scripts/publish_packages.py --prune-edge --keep-edge 10 $devices
       - name: Prune firmware cache
         run: python3 scripts/cache_firmware.py prune --max-age-days 30 --keep-shas 10
 
@@ -185,16 +209,20 @@ jobs:
           rest="${tag#firmware/}"
           device="${rest%%/v*}"
           version="${tag#firmware/$device/}"
+          sha="$(git rev-parse HEAD)"
           output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
           echo "device=$device" >> "$output_path"
           echo "version=$version" >> "$output_path"
+          echo "sha=$sha" >> "$output_path"
       - id: firmware_cache
-        name: Restore cached firmware
+        name: Restore cached release firmware
         run: |
           set +e
-          sha="$(git rev-parse HEAD)"
-          python3 scripts/cache_firmware.py restore --sha "$sha" --wait-seconds 1200 "${{ steps.meta.outputs.device }}"
-          status=$?
+          python3 scripts/cache_firmware.py restore \
+            --sha "${{ steps.meta.outputs.sha }}" \
+            --wait-seconds 60 \
+            "${{ steps.meta.outputs.device }}"
+          status="$?"
           set -e
           output_path="${FORGEJO_OUTPUT:-$GITHUB_OUTPUT}"
           if [ "$status" -eq 0 ]; then
@@ -206,16 +234,16 @@ jobs:
           fi
       - name: Compile release device
         if: steps.firmware_cache.outputs.hit != 'true'
-        run: python3 scripts/compile_devices.py "${{ steps.meta.outputs.device }}"
-      - name: Store fallback firmware cache
+        run: python3 scripts/compile_devices.py "${{ steps.meta.outputs.device }}" --firmware-version "${{ steps.meta.outputs.version }}"
+      - name: Store release firmware cache
         if: steps.firmware_cache.outputs.hit != 'true'
-        run: |
-          sha="$(git rev-parse HEAD)"
-          python3 scripts/cache_firmware.py store --sha "$sha" "${{ steps.meta.outputs.device }}"
+        run: python3 scripts/cache_firmware.py store --sha "${{ steps.meta.outputs.sha }}" "${{ steps.meta.outputs.device }}"
       - name: Package release device
         run: |
-          sha="$(git rev-parse HEAD)"
-          python3 scripts/package_device.py "${{ steps.meta.outputs.device }}" --version "${{ steps.meta.outputs.version }}" --source-sha "$sha"
+          python3 scripts/package_device.py "${{ steps.meta.outputs.device }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --channel stable \
+            --source-sha "${{ steps.meta.outputs.sha }}"
       - name: Publish release device
         env:
           PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}

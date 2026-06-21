@@ -28,11 +28,16 @@
 substitutions:
   devicename: m5stack-airq
   friendlyname: "M5Stack AirQ"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
   sensor_interval: 60s   # SCD40/SEN55 poll + e-ink refresh cadence
 
 esphome:
   name: ${devicename}
   friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.m5stack-airq
+    version: ${firmware_version}
   on_boot:
     # Power-gate the SEN55 on as early as possible (before sensor/i2c setup at
     # lower priority) so its first measurement command lands on a live sensor.
@@ -68,6 +73,15 @@ api:
 
 ota:
   - platform: esphome
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
 
 captive_portal:
 wifi:
@@ -76,6 +90,34 @@ wifi:
   ap:
     ssid: "airq-${devicename}"
     password: !secret fallback_hotspot_key
+
+mqtt:
+  broker: 192.168.8.3
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/m5stack-airq
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/m5stack-airq/debug
+    level: NONE
+  on_connect:
+    - mqtt.publish:
+        topic: grow/daniel-home/m5stack-airq/_firmware/config
+        retain: true
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "m5stack-airq",
+            "projectName": "stackdrift.m5stack-airq",
+            "packageOwner": "stackdrift",
+            "package": "m5stack-airq",
+            "device": "m5stack-airq",
+            "chipFamily": "ESP32-S3",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/m5stack-airq/manifest"
+          }
 
 i2c:
   id: bus_a
@@ -320,6 +362,13 @@ number:
     internal: true
 
 button:
+  - platform: template
+    name: "Check Firmware Update"
+    entity_category: diagnostic
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 50 }
+    on_press:
+      - update.check:
+          id: firmware_update
   - platform: restart
     name: "Restart"
     web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }

@@ -9,13 +9,21 @@ devices:
   atlas-hydro-kit:
     config: devices/atlas-hydro-kit.yaml
     esphome_name: atlas-hydro-monitor
+    node_id: atlas-hydro-monitor
+    project_name: stackdrift.atlas-hydro-kit
     package: atlas-hydro-kit
+    package_owner: stackdrift
+    chip_family: ESP32
     release: true
     component_dependency: *stackdrift_esphome_components
   atoms3u-sensor-rig:
     config: devices/atoms3u-sensor-rig.yaml
     esphome_name: atoms3u-sensor-rig
+    node_id: atoms3u-sensor-rig
+    project_name: stackdrift.atoms3u-sensor-rig
     package: atoms3u-sensor-rig
+    package_owner: stackdrift
+    chip_family: ESP32-S3
     release: true
     assets:
       - assets/thermal_overlay.js
@@ -23,6 +31,10 @@ devices:
   m5stack-airq:
     config: devices/m5stack-airq.yaml
     esphome_name: m5stack-airq
+    node_id: m5stack-airq
+    project_name: stackdrift.m5stack-airq
     package: m5stack-airq
+    package_owner: stackdrift
+    chip_family: ESP32-S3
     release: true
     component_dependency: *stackdrift_esphome_components
