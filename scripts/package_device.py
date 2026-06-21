@@ -68,18 +68,28 @@ def git_commits(base_ref: str | None, head_ref: str, limit: int = 30) -> list[di
     return commits
 
 
-def release_metadata(device: str, channel: str, version: str, source_sha: str) -> dict[str, object]:
+def release_metadata(
+    device: str,
+    channel: str,
+    version: str,
+    source_sha: str,
+    changelog_base_ref: str | None = None,
+    changelog_base_version: str | None = None,
+) -> dict[str, object]:
     tags = git_tags()
     if channel == "stable":
-        base_tag = previous_stable_tag(tags, device, version)
+        base_ref = changelog_base_ref or previous_stable_tag(tags, device, version)
+        base_version = changelog_base_version
     elif channel == "edge":
-        base_tag = latest_stable_tag(tags, device)
+        base_ref = changelog_base_ref
+        base_version = changelog_base_version
     else:
         raise ValueError(f"unsupported firmware channel: {channel}")
 
-    commits = git_commits(base_tag, source_sha)
-    if base_tag:
-        summary = f"{len(commits)} commits since {base_tag}"
+    commits = git_commits(base_ref, source_sha)
+    base_label = base_version or base_ref
+    if base_label:
+        summary = f"{len(commits)} commits since {base_label}"
     else:
         summary = f"Initial {channel} firmware package for {device}"
 
@@ -87,7 +97,9 @@ def release_metadata(device: str, channel: str, version: str, source_sha: str) -
         "release_url": release_url(device, channel, version, source_sha),
         "release_summary": summary,
         "changelog": {
-            "base_tag": base_tag,
+            "base_ref": base_ref,
+            "base_tag": base_ref if base_ref and base_ref.startswith(f"firmware/{device}/") else None,
+            "base_version": base_version,
             "target_sha": source_sha,
             "commits": commits,
         },
@@ -108,6 +120,8 @@ def package_device(
     channel: str | None = None,
     build_profile: str = "site-private",
     flashable: bool = True,
+    changelog_base_ref: str | None = None,
+    changelog_base_version: str | None = None,
 ) -> Path:
     spec = device_spec(name)
     resolved_channel = channel or firmware_channel(version)
@@ -128,7 +142,14 @@ def package_device(
     shutil.copy2(factory_source, factory_dest)
 
     artifact_filenames = [ota_dest.name, factory_dest.name]
-    metadata = release_metadata(name, resolved_channel, version, source_sha)
+    metadata = release_metadata(
+        name,
+        resolved_channel,
+        version,
+        source_sha,
+        changelog_base_ref=changelog_base_ref,
+        changelog_base_version=changelog_base_version,
+    )
     manifest = {
         "schema": "grow-firmware-package.v1",
         "channel": resolved_channel,
@@ -177,6 +198,16 @@ def main() -> None:
         help="Commit SHA to record in the manifest. Defaults to HEAD.",
     )
     parser.add_argument(
+        "--changelog-base-ref",
+        default=None,
+        help="Git ref or SHA to use as the changelog base instead of the channel default.",
+    )
+    parser.add_argument(
+        "--changelog-base-version",
+        default=None,
+        help="Firmware version label for --changelog-base-ref.",
+    )
+    parser.add_argument(
         "--dist-root",
         default="dist",
         help="Directory to write packaged artifacts into.",
@@ -206,6 +237,8 @@ def main() -> None:
         channel=args.channel,
         build_profile=args.build_profile,
         flashable=args.build_profile == "site-private",
+        changelog_base_ref=args.changelog_base_ref,
+        changelog_base_version=args.changelog_base_version,
     )
     print(manifest_path)
 
