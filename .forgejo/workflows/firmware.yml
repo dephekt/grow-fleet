@@ -156,15 +156,30 @@ jobs:
       - name: Compile release devices for edge
         run: python3 scripts/compile_devices.py --all --release-only --firmware-version "${{ steps.edge_meta.outputs.version }}"
       - name: Package edge devices
+        env:
+          PACKAGE_USER: stackdrift-firmware
+          PACKAGE_AUTH_USER: ${{ secrets.PACKAGE_AUTH_USER }}
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
         run: |
           devices="$(python3 scripts/list_devices.py --release-only)"
           for device in $devices; do
+            base_file="$(mktemp)"
+            python3 scripts/edge_changelog_base.py "$device" \
+              --exclude-version "${{ steps.edge_meta.outputs.version }}" > "$base_file"
+            base_ref="$(sed -n 's/^source_sha=//p' "$base_file")"
+            base_version="$(sed -n 's/^version=//p' "$base_file")"
+            rm -f "$base_file"
+            set --
+            if [ -n "$base_ref" ]; then
+              set -- --changelog-base-ref "$base_ref" --changelog-base-version "$base_version"
+            fi
             python3 scripts/package_device.py "$device" \
               --version "${{ steps.edge_meta.outputs.version }}" \
               --channel edge \
               --source-sha "${{ steps.edge_meta.outputs.sha }}" \
               --build-profile site-private \
-              --require-flashable-secrets
+              --require-flashable-secrets \
+              "$@"
           done
       - name: Publish edge devices
         env:

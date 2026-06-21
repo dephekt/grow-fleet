@@ -21,7 +21,8 @@ from fleetlib import (  # noqa: E402
     sha256_file,
     stable_version_key,
 )
-from package_device import latest_stable_tag, package_device, previous_stable_tag  # noqa: E402
+from edge_changelog_base import latest_edge_package  # noqa: E402
+from package_device import latest_stable_tag, package_device, previous_stable_tag, release_metadata  # noqa: E402
 from publish_packages import edge_cleanup_candidates, list_generic_packages  # noqa: E402
 
 
@@ -49,6 +50,59 @@ class FirmwarePackagingTests(unittest.TestCase):
         self.assertEqual(previous_stable_tag(tags, "atoms3u-sensor-rig", "v0.2.0"), "firmware/atoms3u-sensor-rig/v0.1.0")
         self.assertIsNone(previous_stable_tag(tags, "atoms3u-sensor-rig", "v0.1.0"))
         self.assertEqual(latest_stable_tag(tags, "atoms3u-sensor-rig"), "firmware/atoms3u-sensor-rig/v0.2.0")
+
+    def test_edge_release_metadata_uses_previous_edge_base_when_provided(self) -> None:
+        commits = [{"sha": "cccccccccccc", "subject": "new edge change"}]
+        with (
+            mock.patch("package_device.git_tags", return_value=["firmware/atoms3u-sensor-rig/v0.1.0"]),
+            mock.patch("package_device.git_commits", return_value=commits) as git_commits,
+        ):
+            metadata = release_metadata(
+                "atoms3u-sensor-rig",
+                "edge",
+                "edge-20260620T190102Z-cccccccccccc",
+                "ccccccccccccdddddddddddddddddddddddddddd",
+                changelog_base_ref="bbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                changelog_base_version="edge-20260620T180102Z-bbbbbbbbbbbb",
+            )
+
+        git_commits.assert_called_once_with("bbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ccccccccccccdddddddddddddddddddddddddddd")
+        self.assertEqual(metadata["release_summary"], "1 commits since edge-20260620T180102Z-bbbbbbbbbbbb")
+        self.assertEqual(metadata["changelog"]["base_ref"], "bbbbbbbbbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        self.assertIsNone(metadata["changelog"]["base_tag"])
+        self.assertEqual(metadata["changelog"]["base_version"], "edge-20260620T180102Z-bbbbbbbbbbbb")
+        self.assertEqual(metadata["changelog"]["commits"], commits)
+
+    def test_edge_release_metadata_without_previous_edge_does_not_use_stable_tag(self) -> None:
+        with (
+            mock.patch("package_device.git_tags", return_value=["firmware/atoms3u-sensor-rig/v0.1.0"]),
+            mock.patch("package_device.git_commits", return_value=[]) as git_commits,
+        ):
+            metadata = release_metadata(
+                "atoms3u-sensor-rig",
+                "edge",
+                "edge-20260620T180102Z-aaaaaaaaaaaa",
+                "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd",
+            )
+
+        git_commits.assert_called_once_with(None, "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd")
+        self.assertEqual(metadata["release_summary"], "Initial edge firmware package for atoms3u-sensor-rig")
+        self.assertIsNone(metadata["changelog"]["base_ref"])
+        self.assertIsNone(metadata["changelog"]["base_tag"])
+        self.assertIsNone(metadata["changelog"]["base_version"])
+
+    def test_latest_edge_package_ignores_non_edge_and_excluded_versions(self) -> None:
+        packages = [
+            {"name": "atoms3u-sensor-rig", "version": "v0.1.0"},
+            {"name": "atoms3u-sensor-rig", "version": "edge-20260620T180102Z-aaaaaaaaaaaa"},
+            {"name": "atoms3u-sensor-rig", "version": "edge-20260620T190102Z-bbbbbbbbbbbb"},
+            {"name": "atoms3u-sensor-rig", "version": "edge-20260620T200102Z-cccccccccccc"},
+        ]
+
+        self.assertEqual(
+            latest_edge_package(packages, exclude_version="edge-20260620T200102Z-cccccccccccc"),
+            {"name": "atoms3u-sensor-rig", "version": "edge-20260620T190102Z-bbbbbbbbbbbb"},
+        )
 
     def test_edge_cleanup_keeps_newest_versions(self) -> None:
         versions = [
