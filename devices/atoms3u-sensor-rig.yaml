@@ -117,6 +117,7 @@ mqtt:
             "nodeId": "atoms3u-sensor-rig",
             "groups": [
               { "id": "overview", "title": "Environment", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "thermal_view", "title": "Thermal Camera", "order": 15, "variant": "camera", "surface": "dashboard", "defaultOpen": true },
               { "id": "thresholds", "title": "Thresholds & Alerts", "order": 20, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
               { "id": "thermal", "title": "Thermal Camera", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
               { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
@@ -129,6 +130,7 @@ mqtt:
               { "component": "sensor", "objectId": "vpd", "group": "overview", "role": "metric", "order": 40 },
               { "component": "sensor", "objectId": "illuminance", "group": "overview", "role": "metric", "order": 50 },
               { "component": "sensor", "objectId": "barometric_pressure", "group": "overview", "role": "metric", "order": 60, "label": "Pressure" },
+              { "component": "camera", "objectId": "thermal_camera", "group": "thermal_view", "role": "camera", "order": 10, "label": "Thermal Camera" },
               { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
               { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
               { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
@@ -161,6 +163,21 @@ mqtt:
               { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
             ]
           }
+    - mqtt.publish:
+        topic: grow/daniel-home/_discovery/camera/atoms3u-sensor-rig/thermal_camera/config
+        retain: true
+        qos: 1
+        payload: !lambda |-
+          return std::string("{") +
+            "\"name\":\"Thermal Camera\"," +
+            "\"object_id\":\"thermal_camera\"," +
+            "\"unique_id\":\"atoms3u_sensor_rig_thermal_camera\"," +
+            "\"image_path\":\"/thermal.jpg\"," +
+            "\"device\":{\"identifiers\":[\"" + get_mac_address() + "\"]," +
+            "\"name\":\"AtomS3U Sensor Rig\"," +
+            "\"manufacturer\":\"stackdrift\"," +
+            "\"model\":\"atoms3u-sensor-rig\"}" +
+            "}";
 
 i2c:
   sda: 2            # AtomS3U Grove Port A: G2 = GPIO2 = SDA
