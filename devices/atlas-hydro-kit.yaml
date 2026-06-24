@@ -208,7 +208,7 @@ i2c:
 status_led:
   pin:
     number: GPIO13
-    inverted: true
+    inverted: false
 
 binary_sensor:
   - platform: status
