@@ -153,13 +153,13 @@ mqtt:
               { "component": "sensor", "objectId": "mlx90640_roi_min_temp", "group": "thermal", "order": 40 },
               { "component": "sensor", "objectId": "mlx90640_roi_mean_temp", "group": "thermal", "order": 50 },
               { "component": "sensor", "objectId": "mlx90640_roi_max_temp", "group": "thermal", "order": 60 },
-              { "component": "select", "objectId": "thermal_color_palette", "group": "thermal", "order": 70 },
-              { "component": "switch", "objectId": "thermal_overlay_enable", "group": "thermal", "order": 80 },
-              { "component": "number", "objectId": "thermal_update_interval", "group": "thermal", "order": 90 },
-              { "component": "switch", "objectId": "roi_enabled", "group": "thermal", "order": 100 },
-              { "component": "number", "objectId": "roi_center_row", "group": "thermal", "order": 110 },
-              { "component": "number", "objectId": "roi_center_column", "group": "thermal", "order": 120 },
-              { "component": "number", "objectId": "roi_size", "group": "thermal", "order": 130 },
+              { "component": "select", "objectId": "thermal_color_palette", "group": "thermal_view", "role": "quick-control", "order": 20 },
+              { "component": "switch", "objectId": "thermal_overlay_enable", "group": "thermal_view", "role": "quick-control", "order": 30 },
+              { "component": "switch", "objectId": "roi_enabled", "group": "thermal_view", "role": "quick-control", "order": 40 },
+              { "component": "number", "objectId": "roi_center_row", "group": "thermal_view", "role": "quick-control", "order": 50 },
+              { "component": "number", "objectId": "roi_center_column", "group": "thermal_view", "role": "quick-control", "order": 60 },
+              { "component": "number", "objectId": "roi_size", "group": "thermal_view", "role": "quick-control", "order": 70 },
+              { "component": "number", "objectId": "thermal_update_interval", "group": "thermal", "order": 70 },
               { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
             ]
           }
