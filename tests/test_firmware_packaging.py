@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,7 @@ from fleetlib import (  # noqa: E402
     sha256_file,
     stable_version_key,
 )
-from edge_changelog_base import latest_edge_package  # noqa: E402
+from edge_changelog_base import download_oci_manifest, latest_edge_package  # noqa: E402
 from edge_build_devices import edge_build_devices, should_build_device  # noqa: E402
 from package_device import latest_stable_tag, package_device, previous_stable_tag, release_metadata  # noqa: E402
 from publish_packages import (  # noqa: E402
@@ -118,6 +119,29 @@ class FirmwarePackagingTests(unittest.TestCase):
             latest_edge_package(packages, exclude_version="edge-20260620T200102Z-cccccccccccc"),
             {"name": "atoms3u-sensor-rig", "version": "edge-20260620T190102Z-bbbbbbbbbbbb"},
         )
+
+    def test_download_oci_manifest_suppresses_oras_progress_stdout(self) -> None:
+        def run_oras(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            output_dir = Path(cmd[cmd.index("--output") + 1])
+            (output_dir / "atoms3u-sensor-rig.manifest.json").write_text(
+                json.dumps({"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch("edge_changelog_base.subprocess.run", side_effect=run_oras) as run:
+            manifest = download_oci_manifest(
+                "ghcr.io",
+                "dephekt",
+                "grow-fleet",
+                "atoms3u-sensor-rig",
+                "edge-20260620T190102Z-bbbbbbbbbbbb",
+                "atoms3u-sensor-rig.manifest.json",
+            )
+
+        self.assertEqual(manifest, {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"})
+        run.assert_called_once()
+        self.assertIs(run.call_args.kwargs["stdout"], subprocess.DEVNULL)
 
     def test_edge_cleanup_keeps_newest_versions(self) -> None:
         versions = [
