@@ -92,7 +92,18 @@ def download_oci_manifest(
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        payload = json.loads((output_dir / manifest_filename).read_text(encoding="utf-8"))
+        manifest_path = output_dir / manifest_filename
+        if not manifest_path.exists():
+            matches = sorted(path for path in output_dir.rglob(manifest_filename) if path.is_file())
+            if matches:
+                manifest_path = matches[0]
+        if not manifest_path.exists():
+            restored = sorted(str(path.relative_to(output_dir)) for path in output_dir.rglob("*") if path.is_file())
+            raise FileNotFoundError(
+                f"missing manifest {manifest_filename} in pulled OCI artifact {oci_ref(registry, owner, package_prefix, package, version)}; "
+                f"restored files: {', '.join(restored) if restored else 'none'}"
+            )
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("package manifest response must be an object")
     return payload
