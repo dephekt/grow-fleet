@@ -82,7 +82,7 @@ jobs:
         env:
           FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
         run: |
-          set -euo pipefail
+          set -eu
           if [ -z "${FLEET_SECRETS_YAML_B64:-}" ]; then
             echo "::notice::Skipping private firmware publish until FLEET_SECRETS_YAML_B64 is configured"
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -96,7 +96,7 @@ jobs:
           GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
         run: |
-          set -euo pipefail
+          set -eu
           printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
 
       - id: edge_meta
@@ -168,7 +168,7 @@ jobs:
         env:
           FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
         run: |
-          set -euo pipefail
+          set -eu
           if [ -z "${FLEET_SECRETS_YAML_B64:-}" ]; then
             echo "::notice::Skipping private firmware publish until FLEET_SECRETS_YAML_B64 is configured"
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -182,7 +182,7 @@ jobs:
           GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
         run: |
-          set -euo pipefail
+          set -eu
           printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
 
       - id: meta
