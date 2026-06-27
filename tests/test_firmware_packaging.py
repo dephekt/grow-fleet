@@ -265,7 +265,54 @@ class FirmwarePackagingTests(unittest.TestCase):
             "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
         )
 
-    def test_publish_device_oci_pushes_flashable_manifest_and_artifacts(self) -> None:
+    def test_publish_device_oci_pushes_flashable_manifest_and_artifacts_without_source_annotation_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device_dir = root / "atoms3u-sensor-rig"
+            device_dir.mkdir()
+            (device_dir / "atoms3u-sensor-rig.ota.bin").write_bytes(b"ota")
+            (device_dir / "atoms3u-sensor-rig.factory.bin").write_bytes(b"factory")
+            manifest_path = device_dir / "atoms3u-sensor-rig.manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "flashable": True,
+                        "package": "atoms3u-sensor-rig",
+                        "version": "edge-20260620T190102Z-bbbbbbbbbbbb",
+                        "artifact_filenames": [
+                            "atoms3u-sensor-rig.ota.bin",
+                            "atoms3u-sensor-rig.factory.bin",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch("publish_packages.subprocess.run") as run:
+                publish_device_oci(
+                    root,
+                    "atoms3u-sensor-rig",
+                    "ghcr.io",
+                    "dephekt",
+                    "grow-fleet",
+                )
+
+        run.assert_called_once_with(
+            [
+                "oras",
+                "push",
+                "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
+                "--artifact-type",
+                OCI_ARTIFACT_TYPE,
+                "atoms3u-sensor-rig.ota.bin:application/octet-stream",
+                "atoms3u-sensor-rig.factory.bin:application/octet-stream",
+                f"atoms3u-sensor-rig.manifest.json:{OCI_MANIFEST_MEDIA_TYPE}",
+            ],
+            check=True,
+            cwd=device_dir,
+        )
+
+    def test_publish_device_oci_can_attach_source_annotation_when_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             device_dir = root / "atoms3u-sensor-rig"
