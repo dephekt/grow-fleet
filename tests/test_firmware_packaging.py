@@ -88,6 +88,13 @@ class FirmwarePackagingTests(unittest.TestCase):
     def test_device_asset_change_impacts_asset_owner(self) -> None:
         self.assertEqual(firmware_impacted_devices(["assets/thermal_overlay.js"]), ["atoms3u-sensor-rig"])
 
+    def test_airq_is_available_for_explicit_builds_but_not_release_selection(self) -> None:
+        self.assertIn("m5stack-airq", device_names())
+        self.assertNotIn("m5stack-airq", device_names(release_only=True))
+
+    def test_airq_config_change_does_not_trigger_release_builds(self) -> None:
+        self.assertEqual(firmware_impacted_devices(["devices/m5stack-airq.yaml"]), [])
+
     def test_esphome_command_defaults_to_esphome(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(esphome_command(), ["esphome"])

@@ -125,10 +125,14 @@ jobs:
       - name: Login to GHCR
         if: steps.publish_ready.outputs.ready == 'true'
         env:
-          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           set -eu
+          if [ -z "${GHCR_USER:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "GHCR_USER and GHCR_TOKEN secrets are required for firmware package publishing" >&2
+            exit 1
+          fi
           printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
 
       - id: edge_meta
@@ -255,10 +259,14 @@ jobs:
       - name: Login to GHCR
         if: steps.publish_ready.outputs.ready == 'true'
         env:
-          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           set -eu
+          if [ -z "${GHCR_USER:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "GHCR_USER and GHCR_TOKEN secrets are required for firmware package publishing" >&2
+            exit 1
+          fi
           printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
 
       - id: meta
@@ -358,7 +366,7 @@ jobs:
           if [ -n "${{ inputs.device }}" ]; then
             uv run --locked python scripts/compile_devices.py "${{ inputs.device }}"
           else
-            uv run --locked python scripts/compile_devices.py --all
+            uv run --locked python scripts/compile_devices.py --all --release-only
           fi
 
       - name: Save PlatformIO cache
