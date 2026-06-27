@@ -19,13 +19,13 @@ from fleetlib import (  # noqa: E402
     edge_version,
     firmware_channel,
     flashable_secret_problems,
-    impacted_devices,
     md5_file,
     sha256_file,
     stable_version_key,
 )
 from edge_changelog_base import download_oci_manifest, latest_edge_package  # noqa: E402
 from edge_build_devices import edge_build_devices, should_build_device  # noqa: E402
+from firmware_inputs import firmware_impacted_devices  # noqa: E402
 from package_device import latest_stable_tag, package_device, previous_stable_tag, release_metadata  # noqa: E402
 from publish_packages import (  # noqa: E402
     OCI_ARTIFACT_TYPE,
@@ -64,8 +64,27 @@ class FirmwarePackagingTests(unittest.TestCase):
         self.assertIsNone(previous_stable_tag(tags, "atoms3u-sensor-rig", "v0.1.0"))
         self.assertEqual(latest_stable_tag(tags, "atoms3u-sensor-rig"), "firmware/atoms3u-sensor-rig/v0.2.0")
 
-    def test_github_workflow_changes_impact_all_devices(self) -> None:
-        self.assertEqual(impacted_devices([".github/workflows/firmware.yml"]), device_names())
+    def test_github_workflow_changes_do_not_impact_firmware_devices(self) -> None:
+        self.assertEqual(firmware_impacted_devices([".github/workflows/firmware.yml"]), [])
+
+    def test_package_only_script_changes_do_not_impact_firmware_devices(self) -> None:
+        self.assertEqual(
+            firmware_impacted_devices(
+                [
+                    "scripts/edge_changelog_base.py",
+                    "scripts/publish_packages.py",
+                    "tests/test_firmware_packaging.py",
+                    "README.md",
+                ]
+            ),
+            [],
+        )
+
+    def test_compile_script_changes_impact_all_release_devices(self) -> None:
+        self.assertEqual(firmware_impacted_devices(["scripts/compile_devices.py"]), device_names(release_only=True))
+
+    def test_device_asset_change_impacts_asset_owner(self) -> None:
+        self.assertEqual(firmware_impacted_devices(["assets/thermal_overlay.js"]), ["atoms3u-sensor-rig"])
 
     def test_edge_release_metadata_uses_previous_edge_base_when_provided(self) -> None:
         commits = [{"sha": "cccccccccccc", "subject": "new edge change"}]
@@ -331,14 +350,14 @@ class FirmwarePackagingTests(unittest.TestCase):
 
         changed.assert_called_with("aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd", "HEAD")
 
-    def test_edge_build_devices_selects_all_release_devices_for_workflow_change(self) -> None:
+    def test_edge_build_devices_skips_workflow_only_changes(self) -> None:
         manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
         with (
             mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
             mock.patch("edge_build_devices.commit_exists", return_value=True),
             mock.patch("edge_build_devices.changed_paths", return_value=[".github/workflows/firmware.yml"]),
         ):
-            self.assertEqual(edge_build_devices("HEAD"), device_names(release_only=True))
+            self.assertEqual(edge_build_devices("HEAD"), [])
 
     def test_edge_build_devices_skips_unrelated_changes(self) -> None:
         manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
@@ -346,6 +365,15 @@ class FirmwarePackagingTests(unittest.TestCase):
             mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
             mock.patch("edge_build_devices.commit_exists", return_value=True),
             mock.patch("edge_build_devices.changed_paths", return_value=["README.md"]),
+        ):
+            self.assertEqual(edge_build_devices("HEAD"), [])
+
+    def test_edge_build_devices_skips_package_only_script_changes(self) -> None:
+        manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
+        with (
+            mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
+            mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.changed_paths", return_value=["scripts/publish_packages.py"]),
         ):
             self.assertEqual(edge_build_devices("HEAD"), [])
 

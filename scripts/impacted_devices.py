@@ -4,7 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 
-from fleetlib import changed_paths, impacted_devices, matrix_payload
+from firmware_inputs import firmware_impacted_devices, matrix_payload
+from fleetlib import changed_paths
 
 
 def main() -> None:
@@ -17,7 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     paths = args.path or changed_paths(args.base, args.head)
-    devices = impacted_devices(paths)
+    devices = firmware_impacted_devices(paths)
 
     if args.matrix:
         print(matrix_payload(devices))
