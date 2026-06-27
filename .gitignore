@@ -1,4 +1,5 @@
 /.esphome/
+/.platformio/
 /devices/.esphome/
 /devices/secrets.yaml
 /secrets.yaml

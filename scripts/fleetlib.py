@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -133,6 +134,10 @@ def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None =
     subprocess.run(cmd, cwd=cwd or ROOT, env=env, check=True)
 
 
+def esphome_command() -> list[str]:
+    return shlex.split(os.environ.get("ESPHOME", "esphome"))
+
+
 def capture(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> str:
     completed = subprocess.run(
         cmd,
@@ -148,8 +153,8 @@ def capture(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | No
 
 def esphome_version() -> str:
     candidates = [
-        ["esphome", "version"],
-        ["esphome", "--version"],
+        [*esphome_command(), "version"],
+        [*esphome_command(), "--version"],
         ["python3", "-m", "esphome", "version"],
     ]
     last_error: Exception | None = None
