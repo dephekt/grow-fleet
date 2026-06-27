@@ -85,8 +85,6 @@ jobs:
 
       - name: Set up ORAS
         uses: oras-project/setup-oras@v2.0.0
-        with:
-          version: v1.3.2
 
       - id: publish_ready
         name: Check protected publish configuration
@@ -191,8 +189,6 @@ jobs:
 
       - name: Set up ORAS
         uses: oras-project/setup-oras@v2.0.0
-        with:
-          version: v1.3.2
 
       - id: publish_ready
         name: Check protected publish configuration
