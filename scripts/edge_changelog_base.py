@@ -128,7 +128,7 @@ def main() -> None:
     parser.add_argument("--oci-owner", default=os.environ.get("OCI_OWNER", "dephekt"), help="OCI registry owner.")
     parser.add_argument(
         "--oci-package-prefix",
-        default=os.environ.get("OCI_PACKAGE_PREFIX", "grow-fleet-firmware"),
+        default=os.environ.get("OCI_PACKAGE_PREFIX", "grow-fleet"),
         help="OCI package prefix.",
     )
     parser.add_argument("--base-url", default="https://codeberg.org", help="Forgejo base URL.")

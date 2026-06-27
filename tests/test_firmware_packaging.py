@@ -24,6 +24,7 @@ from fleetlib import (  # noqa: E402
     stable_version_key,
 )
 from edge_changelog_base import latest_edge_package  # noqa: E402
+from edge_build_devices import edge_build_devices, should_build_device  # noqa: E402
 from package_device import latest_stable_tag, package_device, previous_stable_tag, release_metadata  # noqa: E402
 from publish_packages import (  # noqa: E402
     OCI_ARTIFACT_TYPE,
@@ -133,18 +134,18 @@ class FirmwarePackagingTests(unittest.TestCase):
 
     def test_oci_reference_uses_prefixed_per_device_package(self) -> None:
         self.assertEqual(
-            oci_package_name("grow-fleet-firmware", "atoms3u-sensor-rig"),
-            "grow-fleet-firmware-atoms3u-sensor-rig",
+            oci_package_name("grow-fleet", "atoms3u-sensor-rig"),
+            "grow-fleet-atoms3u-sensor-rig",
         )
         self.assertEqual(
             oci_ref(
                 "ghcr.io",
                 "dephekt",
-                "grow-fleet-firmware",
+                "grow-fleet",
                 "atoms3u-sensor-rig",
                 "edge-20260620T190102Z-bbbbbbbbbbbb",
             ),
-            "ghcr.io/dephekt/grow-fleet-firmware-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
+            "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
         )
 
     def test_publish_device_oci_pushes_flashable_manifest_and_artifacts(self) -> None:
@@ -171,13 +172,13 @@ class FirmwarePackagingTests(unittest.TestCase):
             )
 
             with mock.patch("publish_packages.subprocess.run") as run:
-                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet-firmware")
+                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet")
 
         run.assert_called_once_with(
             [
                 "oras",
                 "push",
-                "ghcr.io/dephekt/grow-fleet-firmware-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
+                "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
                 "--artifact-type",
                 OCI_ARTIFACT_TYPE,
                 f"{device_dir / 'atoms3u-sensor-rig.ota.bin'}:application/octet-stream",
@@ -205,7 +206,7 @@ class FirmwarePackagingTests(unittest.TestCase):
             )
 
             with self.assertRaises(ValueError), mock.patch("publish_packages.subprocess.run") as run:
-                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet-firmware")
+                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet")
 
         run.assert_not_called()
 
@@ -222,7 +223,7 @@ class FirmwarePackagingTests(unittest.TestCase):
             ),
             mock.patch("publish_packages.subprocess.run") as run,
         ):
-            removed = prune_edge_oci_packages("ghcr.io", "dephekt", "grow-fleet-firmware", "atoms3u-sensor-rig", keep=2)
+            removed = prune_edge_oci_packages("ghcr.io", "dephekt", "grow-fleet", "atoms3u-sensor-rig", keep=2)
 
         self.assertEqual(removed, ["edge-20260619T190102Z-cccccccccccc"])
         run.assert_called_once_with(
@@ -231,10 +232,48 @@ class FirmwarePackagingTests(unittest.TestCase):
                 "manifest",
                 "delete",
                 "--force",
-                "ghcr.io/dephekt/grow-fleet-firmware-atoms3u-sensor-rig:edge-20260619T190102Z-cccccccccccc",
+                "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260619T190102Z-cccccccccccc",
             ],
             check=True,
         )
+
+    def test_edge_build_devices_selects_devices_without_previous_package(self) -> None:
+        with mock.patch("edge_build_devices.latest_edge_manifest", return_value=None):
+            self.assertTrue(should_build_device("atoms3u-sensor-rig", "HEAD"))
+
+    def test_edge_build_devices_selects_changed_device_since_previous_edge(self) -> None:
+        manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
+        with (
+            mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
+            mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.changed_paths", return_value=["devices/atoms3u-sensor-rig.yaml"]) as changed,
+        ):
+            self.assertTrue(should_build_device("atoms3u-sensor-rig", "HEAD"))
+            self.assertFalse(should_build_device("atlas-hydro-kit", "HEAD"))
+
+        changed.assert_called_with("aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd", "HEAD")
+
+    def test_edge_build_devices_selects_all_release_devices_for_workflow_change(self) -> None:
+        manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
+        with (
+            mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
+            mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.changed_paths", return_value=[".github/workflows/firmware.yml"]),
+        ):
+            self.assertEqual(edge_build_devices("HEAD"), device_names(release_only=True))
+
+    def test_edge_build_devices_skips_unrelated_changes(self) -> None:
+        manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
+        with (
+            mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
+            mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.changed_paths", return_value=["README.md"]),
+        ):
+            self.assertEqual(edge_build_devices("HEAD"), [])
+
+    def test_edge_build_devices_is_conservative_for_unreadable_manifest(self) -> None:
+        with mock.patch("edge_build_devices.latest_edge_manifest", side_effect=RuntimeError("denied")):
+            self.assertTrue(should_build_device("atoms3u-sensor-rig", "HEAD"))
 
     def test_package_listing_reads_all_pages(self) -> None:
         calls: list[str] = []
