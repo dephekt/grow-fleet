@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import argparse
 
-from fleetlib import device_names, device_spec, ensure_secrets_link, run
+from fleetlib import ROOT, device_names, device_spec, ensure_secrets_link, esphome_command, run
 
 
 def compile_device(name: str, firmware_version: str | None = None, package_owner: str | None = None) -> None:
     spec = device_spec(name)
     ensure_secrets_link()
-    cmd = ["esphome"]
+    cmd = esphome_command()
     if firmware_version:
         cmd.extend(["-s", "firmware_version", firmware_version])
     cmd.extend(["-s", "package_owner", package_owner or spec.package_owner])
-    cmd.extend(["compile", str(spec.config)])
+    cmd.extend(["compile", str(spec.config.relative_to(ROOT))])
     run(cmd)
 
 

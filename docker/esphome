@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# ESPHome CLI in the local Docker daemon, mounted against this repo.
+#
+# The default Docker context on Daniel's workstation is often media-server,
+# but USB-attached devices such as /dev/ttyACM0 exist on the local host.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec env DOCKER_CONTEXT=default docker compose -p grow-fleet-esphome -f "$here/esphome-dev.yml" run --rm esphome "$@"
