@@ -243,7 +243,7 @@ def impacted_devices(paths: Iterable[str]) -> list[str]:
         if path_strings.intersection(watched):
             impacted.add(spec.name)
 
-    if any(path.startswith("scripts/") or path.startswith(".forgejo/workflows/") for path in path_strings):
+    if any(path.startswith("scripts/") or path.startswith(".github/workflows/") for path in path_strings):
         impacted.update(spec.name for spec in specs)
 
     return sorted(impacted)

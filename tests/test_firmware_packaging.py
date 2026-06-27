@@ -13,17 +13,28 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from fleetlib import (  # noqa: E402
     assert_flashable_secrets,
+    device_names,
     device_spec,
     edge_version,
     firmware_channel,
     flashable_secret_problems,
+    impacted_devices,
     md5_file,
     sha256_file,
     stable_version_key,
 )
 from edge_changelog_base import latest_edge_package  # noqa: E402
 from package_device import latest_stable_tag, package_device, previous_stable_tag, release_metadata  # noqa: E402
-from publish_packages import edge_cleanup_candidates, list_generic_packages  # noqa: E402
+from publish_packages import (  # noqa: E402
+    OCI_ARTIFACT_TYPE,
+    OCI_MANIFEST_MEDIA_TYPE,
+    edge_cleanup_candidates,
+    list_generic_packages,
+    oci_package_name,
+    oci_ref,
+    publish_device_oci,
+    prune_edge_oci_packages,
+)
 
 
 class FirmwarePackagingTests(unittest.TestCase):
@@ -50,6 +61,9 @@ class FirmwarePackagingTests(unittest.TestCase):
         self.assertEqual(previous_stable_tag(tags, "atoms3u-sensor-rig", "v0.2.0"), "firmware/atoms3u-sensor-rig/v0.1.0")
         self.assertIsNone(previous_stable_tag(tags, "atoms3u-sensor-rig", "v0.1.0"))
         self.assertEqual(latest_stable_tag(tags, "atoms3u-sensor-rig"), "firmware/atoms3u-sensor-rig/v0.2.0")
+
+    def test_github_workflow_changes_impact_all_devices(self) -> None:
+        self.assertEqual(impacted_devices([".github/workflows/firmware.yml"]), device_names())
 
     def test_edge_release_metadata_uses_previous_edge_base_when_provided(self) -> None:
         commits = [{"sha": "cccccccccccc", "subject": "new edge change"}]
@@ -115,6 +129,111 @@ class FirmwarePackagingTests(unittest.TestCase):
         self.assertEqual(
             edge_cleanup_candidates(versions, keep=2),
             ["edge-20260619T190102Z-cccccccccccc"],
+        )
+
+    def test_oci_reference_uses_prefixed_per_device_package(self) -> None:
+        self.assertEqual(
+            oci_package_name("grow-fleet-firmware", "atoms3u-sensor-rig"),
+            "grow-fleet-firmware-atoms3u-sensor-rig",
+        )
+        self.assertEqual(
+            oci_ref(
+                "ghcr.io",
+                "dephekt",
+                "grow-fleet-firmware",
+                "atoms3u-sensor-rig",
+                "edge-20260620T190102Z-bbbbbbbbbbbb",
+            ),
+            "ghcr.io/dephekt/grow-fleet-firmware-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
+        )
+
+    def test_publish_device_oci_pushes_flashable_manifest_and_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device_dir = root / "atoms3u-sensor-rig"
+            device_dir.mkdir()
+            (device_dir / "atoms3u-sensor-rig.ota.bin").write_bytes(b"ota")
+            (device_dir / "atoms3u-sensor-rig.factory.bin").write_bytes(b"factory")
+            manifest_path = device_dir / "atoms3u-sensor-rig.manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "flashable": True,
+                        "package": "atoms3u-sensor-rig",
+                        "version": "edge-20260620T190102Z-bbbbbbbbbbbb",
+                        "artifact_filenames": [
+                            "atoms3u-sensor-rig.ota.bin",
+                            "atoms3u-sensor-rig.factory.bin",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch("publish_packages.subprocess.run") as run:
+                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet-firmware")
+
+        run.assert_called_once_with(
+            [
+                "oras",
+                "push",
+                "ghcr.io/dephekt/grow-fleet-firmware-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
+                "--artifact-type",
+                OCI_ARTIFACT_TYPE,
+                f"{device_dir / 'atoms3u-sensor-rig.ota.bin'}:application/octet-stream",
+                f"{device_dir / 'atoms3u-sensor-rig.factory.bin'}:application/octet-stream",
+                f"{manifest_path}:{OCI_MANIFEST_MEDIA_TYPE}",
+            ],
+            check=True,
+        )
+
+    def test_publish_device_oci_rejects_non_flashable_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device_dir = root / "atoms3u-sensor-rig"
+            device_dir.mkdir()
+            (device_dir / "atoms3u-sensor-rig.manifest.json").write_text(
+                json.dumps(
+                    {
+                        "flashable": False,
+                        "package": "atoms3u-sensor-rig",
+                        "version": "edge-20260620T190102Z-bbbbbbbbbbbb",
+                        "artifact_filenames": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError), mock.patch("publish_packages.subprocess.run") as run:
+                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet-firmware")
+
+        run.assert_not_called()
+
+    def test_prune_edge_oci_packages_deletes_old_edge_tags(self) -> None:
+        with (
+            mock.patch(
+                "publish_packages.list_oci_tags",
+                return_value=[
+                    "v0.1.0",
+                    "edge-20260620T180102Z-aaaaaaaaaaaa",
+                    "edge-20260620T190102Z-bbbbbbbbbbbb",
+                    "edge-20260619T190102Z-cccccccccccc",
+                ],
+            ),
+            mock.patch("publish_packages.subprocess.run") as run,
+        ):
+            removed = prune_edge_oci_packages("ghcr.io", "dephekt", "grow-fleet-firmware", "atoms3u-sensor-rig", keep=2)
+
+        self.assertEqual(removed, ["edge-20260619T190102Z-cccccccccccc"])
+        run.assert_called_once_with(
+            [
+                "oras",
+                "manifest",
+                "delete",
+                "--force",
+                "ghcr.io/dephekt/grow-fleet-firmware-atoms3u-sensor-rig:edge-20260619T190102Z-cccccccccccc",
+            ],
+            check=True,
         )
 
     def test_package_listing_reads_all_pages(self) -> None:

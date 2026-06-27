@@ -4,12 +4,12 @@ ESPHome firmware configurations for the stackdrift grow controller fleet.
 
 This repository owns real device YAMLs, firmware compile CI, and release
 artifacts for site-local OTA workflows. Reusable ESPHome components remain in
-[`stackdrift/esphome-components`](https://codeberg.org/stackdrift/esphome-components).
+[`dephekt/esphome-components`](https://github.com/dephekt/esphome-components).
 
 ## CI Tooling
 
 The CI slice in this repo is driven by the scripts under `scripts/` and the
-Forgejo workflow at `.forgejo/workflows/firmware.yml`.
+GitHub Actions workflow at `.github/workflows/firmware.yml`.
 
 Common local commands:
 
@@ -25,22 +25,22 @@ python3 scripts/publish_packages.py atlas-hydro-kit
 
 The release workflow packages compiled firmware as `dist/<device>/<device>.ota.bin`,
 `dist/<device>/<device>.factory.bin`, and `dist/<device>/<device>.manifest.json`.
-Publishing uses the Forgejo generic package API with `PACKAGE_TOKEN` or
-`FORGEJO_TOKEN`, uses Basic auth for `PACKAGE_TOKEN`, uses Bearer auth for the
-automatic `FORGEJO_TOKEN`, and defaults to the `stackdrift` package namespace.
-`PACKAGE_AUTH_USER` only applies to `PACKAGE_TOKEN` publishing.
+Publishing uses private GHCR OCI artifacts via `oras`. Log in to GHCR before
+running `scripts/publish_packages.py`; the default package names are
+`ghcr.io/dephekt/grow-fleet-firmware-<device>`. Keep those firmware packages
+private; the public repository is only for source, structure, and config.
 
 Workflow behavior:
 
 - Pull requests compile only impacted devices.
-- Pull requests and manual dispatches share the runner-local PlatformIO cache.
-- Pushes to `main` compile every device, store compiled firmware under the runner-local cache keyed by commit SHA, and prune old cached firmware.
-- Tags matching `firmware/<device>/vX.Y.Z` restore cached firmware for the tagged commit when available, falling back to compile/store on a miss, then package and publish that one device.
+- Pull requests and manual dispatches use compile-only placeholder secrets and
+  never publish firmware.
+- Pushes to `main` compile every release device with protected firmware secrets,
+  publish edge packages to private GHCR OCI artifacts, and prune old edge tags.
+- Tags matching `firmware/<device>/vX.Y.Z` compile, package, and publish that
+  one stable firmware package.
+- If `FLEET_SECRETS_YAML_B64` is not configured yet, trusted publish jobs skip
+  the protected firmware build instead of failing the first migration push.
 
-Firmware cache storage is runner-local at `/runner-cache/grow-fleet`, backed by
-`/srv/forgejo-runner/cache/grow-fleet` on the runner host. The workflow does not
-use Codeberg Actions artifacts for this temporary cache; Forgejo generic
-packages remain the durable release output.
-The runner host must create that directory and include it in the runner
-`container.valid_volumes` allowlist; otherwise the runner ignores the bind mount
-before the job starts.
+GitHub-hosted runners do not use a runner-local firmware cache. Private GHCR
+OCI artifacts are the durable release output.

@@ -4,6 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import tempfile
+from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -13,7 +16,9 @@ from publish_packages import (
     EDGE_VERSION_RE,
     PRIVATE_PACKAGE_USER,
     authorization_header,
+    list_oci_tags,
     list_generic_packages,
+    oci_ref,
 )
 
 
@@ -66,6 +71,32 @@ def download_manifest(
     return payload
 
 
+def download_oci_manifest(
+    registry: str,
+    owner: str,
+    package_prefix: str,
+    package: str,
+    version: str,
+    manifest_filename: str,
+) -> dict[str, object]:
+    with tempfile.TemporaryDirectory() as tmp:
+        output_dir = Path(tmp)
+        subprocess.run(
+            [
+                "oras",
+                "pull",
+                "--output",
+                str(output_dir),
+                oci_ref(registry, owner, package_prefix, package, version),
+            ],
+            check=True,
+        )
+        payload = json.loads((output_dir / manifest_filename).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("package manifest response must be an object")
+    return payload
+
+
 def resolve_auth(package_user: str, explicit_auth_user: str | None) -> tuple[str | None, str | None, str]:
     package_token = os.environ.get("PACKAGE_TOKEN")
     forgejo_token = os.environ.get("FORGEJO_TOKEN")
@@ -87,6 +118,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Print the latest published edge package as changelog base key-value lines.")
     parser.add_argument("device", help="Fleet device name.")
     parser.add_argument("--exclude-version", default=None, help="Edge version to ignore when selecting the previous package.")
+    parser.add_argument(
+        "--provider",
+        choices=["ghcr-oci", "forgejo-generic"],
+        default=os.environ.get("PACKAGE_PROVIDER", "ghcr-oci"),
+        help="Artifact backend to read from.",
+    )
+    parser.add_argument("--oci-registry", default=os.environ.get("OCI_REGISTRY", "ghcr.io"), help="OCI registry.")
+    parser.add_argument("--oci-owner", default=os.environ.get("OCI_OWNER", "dephekt"), help="OCI registry owner.")
+    parser.add_argument(
+        "--oci-package-prefix",
+        default=os.environ.get("OCI_PACKAGE_PREFIX", "grow-fleet-firmware"),
+        help="OCI package prefix.",
+    )
     parser.add_argument("--base-url", default="https://codeberg.org", help="Forgejo base URL.")
     parser.add_argument(
         "--package-user",
@@ -101,6 +145,34 @@ def main() -> None:
     args = parser.parse_args()
 
     spec = device_spec(args.device)
+    if args.provider == "ghcr-oci":
+        packages = [
+            {"name": spec.package, "version": version}
+            for version in list_oci_tags(args.oci_registry, args.oci_owner, args.oci_package_prefix, spec.package)
+        ]
+        latest = latest_edge_package(packages, exclude_version=args.exclude_version)
+        if not latest:
+            return
+        version = str(latest["version"])
+        manifest = download_oci_manifest(
+            args.oci_registry,
+            args.oci_owner,
+            args.oci_package_prefix,
+            spec.package,
+            version,
+            f"{args.device}.manifest.json",
+        )
+        source_sha = manifest.get("source_sha")
+        manifest_version = manifest.get("version", version)
+        if not isinstance(source_sha, str) or not source_sha:
+            raise ValueError(f"package manifest is missing source_sha for {spec.package} {version}")
+        if not isinstance(manifest_version, str) or not manifest_version:
+            raise ValueError(f"package manifest is missing version for {spec.package} {version}")
+
+        print(f"version={manifest_version}")
+        print(f"source_sha={source_sha}")
+        return
+
     package_user = args.package_user or spec.package_owner
     auth_user, token, auth_scheme = resolve_auth(package_user, args.auth_user)
     packages = list_generic_packages(

@@ -108,8 +108,8 @@ def release_metadata(
 
 def release_url(device: str, channel: str, version: str, source_sha: str) -> str:
     if channel == "stable":
-        return f"https://codeberg.org/stackdrift/grow-fleet/src/tag/firmware/{device}/{version}"
-    return f"https://codeberg.org/stackdrift/grow-fleet/src/commit/{source_sha}"
+        return f"https://github.com/dephekt/grow-fleet/tree/firmware/{device}/{version}"
+    return f"https://github.com/dephekt/grow-fleet/commit/{source_sha}"
 
 
 def package_device(
