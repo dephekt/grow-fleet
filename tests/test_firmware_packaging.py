@@ -172,7 +172,14 @@ class FirmwarePackagingTests(unittest.TestCase):
             )
 
             with mock.patch("publish_packages.subprocess.run") as run:
-                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet")
+                publish_device_oci(
+                    root,
+                    "atoms3u-sensor-rig",
+                    "ghcr.io",
+                    "dephekt",
+                    "grow-fleet",
+                    "https://github.com/dephekt/grow-fleet",
+                )
 
         run.assert_called_once_with(
             [
@@ -181,6 +188,8 @@ class FirmwarePackagingTests(unittest.TestCase):
                 "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
                 "--artifact-type",
                 OCI_ARTIFACT_TYPE,
+                "--annotation",
+                "org.opencontainers.image.source=https://github.com/dephekt/grow-fleet",
                 f"{device_dir / 'atoms3u-sensor-rig.ota.bin'}:application/octet-stream",
                 f"{device_dir / 'atoms3u-sensor-rig.factory.bin'}:application/octet-stream",
                 f"{manifest_path}:{OCI_MANIFEST_MEDIA_TYPE}",

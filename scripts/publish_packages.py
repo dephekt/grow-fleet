@@ -17,6 +17,8 @@ PRIVATE_PACKAGE_USER = "stackdrift-firmware"
 DEFAULT_OCI_REGISTRY = "ghcr.io"
 DEFAULT_OCI_OWNER = "dephekt"
 DEFAULT_OCI_PACKAGE_PREFIX = "grow-fleet"
+DEFAULT_OCI_SOURCE_URL = "https://github.com/dephekt/grow-fleet"
+OCI_SOURCE_ANNOTATION = "org.opencontainers.image.source"
 OCI_ARTIFACT_TYPE = "application/vnd.stackdrift.grow-firmware.v1"
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.stackdrift.grow-firmware.manifest.v1+json"
 PACKAGE_LIST_PAGE_SIZE = 50
@@ -240,6 +242,7 @@ def publish_device_oci(
     registry: str,
     owner: str,
     package_prefix: str,
+    source_url: str | None = None,
 ) -> None:
     device_dir = dist_root / device
     manifest_path = device_dir / f"{device}.manifest.json"
@@ -254,6 +257,8 @@ def publish_device_oci(
     version = str(manifest["version"])
     target = oci_ref(registry, owner, package_prefix, package, version)
     args = ["oras", "push", target, "--artifact-type", OCI_ARTIFACT_TYPE]
+    if source_url:
+        args.extend(["--annotation", f"{OCI_SOURCE_ANNOTATION}={source_url}"])
     for filename in manifest["artifact_filenames"]:
         args.append(f"{device_dir / str(filename)}:application/octet-stream")
     args.append(f"{manifest_path}:{OCI_MANIFEST_MEDIA_TYPE}")
@@ -310,6 +315,11 @@ def main() -> None:
         help="Prefix for per-device OCI firmware package names.",
     )
     parser.add_argument(
+        "--oci-source-url",
+        default=os.environ.get("OCI_SOURCE_URL", DEFAULT_OCI_SOURCE_URL),
+        help="Repository URL to attach as the OCI source annotation.",
+    )
+    parser.add_argument(
         "--base-url",
         default="https://codeberg.org",
         help="Forgejo base URL for forgejo-generic publishing.",
@@ -345,7 +355,14 @@ def main() -> None:
     dist_root = Path(args.dist_root)
     if args.provider == "ghcr-oci":
         for device in args.devices:
-            publish_device_oci(dist_root, device, args.oci_registry, args.oci_owner, args.oci_package_prefix)
+            publish_device_oci(
+                dist_root,
+                device,
+                args.oci_registry,
+                args.oci_owner,
+                args.oci_package_prefix,
+                args.oci_source_url,
+            )
             if args.prune_edge:
                 manifest_path = dist_root / device / f"{device}.manifest.json"
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
