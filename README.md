@@ -14,6 +14,10 @@ GitHub Actions workflow at `.github/workflows/firmware.yml`.
 Common local commands:
 
 ```sh
+make list-devices
+make build atoms3u-sensor-rig
+make flash atoms3u-sensor-rig PORT=/dev/ttyACM0
+make logs atoms3u-sensor-rig PORT=/dev/ttyACM0
 uv run --locked python scripts/list_devices.py
 uv run --locked python scripts/impacted_devices.py --base <base-sha> --head <head-sha>
 uv run --locked python scripts/compile_devices.py --all
@@ -22,6 +26,14 @@ FIRMWARE_CACHE_ROOT=/tmp/grow-fleet-cache uv run --locked python scripts/cache_f
 uv run --locked python scripts/package_device.py atlas-hydro-kit --version v1.2.3
 uv run --locked python scripts/publish_packages.py atlas-hydro-kit
 ```
+
+The Makefile targets run ESPHome through `./docker/esphome`, a Docker Compose
+wrapper that forces the local Docker context so USB devices such as
+`/dev/ttyACM0` are visible even when the default Docker context points at a
+remote host. The direct Python compile path still works in CI or on hosts with
+ESPHome installed; set `ESPHOME=./docker/esphome` to route it through Docker.
+`make flash` checks that `devices/secrets.yaml` exists and is not using the
+compile-only placeholder values before flashing.
 
 The release workflow packages compiled firmware as `dist/<device>/<device>.ota.bin`,
 `dist/<device>/<device>.factory.bin`, and `dist/<device>/<device>.manifest.json`.

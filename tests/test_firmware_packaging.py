@@ -17,12 +17,14 @@ from fleetlib import (  # noqa: E402
     device_names,
     device_spec,
     edge_version,
+    esphome_command,
     firmware_channel,
     flashable_secret_problems,
     md5_file,
     sha256_file,
     stable_version_key,
 )
+from compile_devices import compile_device  # noqa: E402
 from edge_changelog_base import download_oci_manifest, latest_edge_package  # noqa: E402
 from edge_build_devices import edge_build_devices, should_build_device  # noqa: E402
 from firmware_inputs import firmware_impacted_devices  # noqa: E402
@@ -85,6 +87,34 @@ class FirmwarePackagingTests(unittest.TestCase):
 
     def test_device_asset_change_impacts_asset_owner(self) -> None:
         self.assertEqual(firmware_impacted_devices(["assets/thermal_overlay.js"]), ["atoms3u-sensor-rig"])
+
+    def test_esphome_command_defaults_to_esphome(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(esphome_command(), ["esphome"])
+
+    def test_esphome_command_uses_environment_override(self) -> None:
+        with mock.patch.dict("os.environ", {"ESPHOME": "./docker/esphome --verbose"}):
+            self.assertEqual(esphome_command(), ["./docker/esphome", "--verbose"])
+
+    def test_compile_device_uses_esphome_override_and_relative_config_path(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {"ESPHOME": "./docker/esphome"}),
+            mock.patch("compile_devices.ensure_secrets_link") as ensure_secrets_link,
+            mock.patch("compile_devices.run") as run,
+        ):
+            compile_device("atoms3u-sensor-rig")
+
+        ensure_secrets_link.assert_called_once_with()
+        run.assert_called_once_with(
+            [
+                "./docker/esphome",
+                "-s",
+                "package_owner",
+                "stackdrift-firmware",
+                "compile",
+                "devices/atoms3u-sensor-rig.yaml",
+            ]
+        )
 
     def test_edge_release_metadata_uses_previous_edge_base_when_provided(self) -> None:
         commits = [{"sha": "cccccccccccc", "subject": "new edge change"}]

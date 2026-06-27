@@ -1,0 +1,22 @@
+# Local ESPHome dev loop for grow-fleet.
+#
+# One-off CLI, via the wrapper:
+#   ./docker/esphome compile devices/atoms3u-sensor-rig.yaml
+#   ./docker/esphome run     devices/atoms3u-sensor-rig.yaml --device /dev/ttyACM0
+#   ./docker/esphome logs    devices/atoms3u-sensor-rig.yaml --device /dev/ttyACM0
+#
+# USB notes: the AtomS3U (ESP32-S3 native USB-Serial-JTAG) appears as
+# /dev/ttyACM0 and re-enumerates on reset while flashing. privileged + /dev bind
+# keeps that serial device visible inside the short-lived ESPHome container.
+services:
+  esphome:
+    image: ghcr.io/esphome/esphome:2026.5
+    working_dir: /config
+    environment:
+      PLATFORMIO_CORE_DIR: /config/.platformio
+    volumes:
+      - ../:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /dev:/dev
+    privileged: true
+    network_mode: host
