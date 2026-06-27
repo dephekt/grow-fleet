@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -13,6 +14,11 @@ from urllib.request import Request, urlopen
 
 DEFAULT_PACKAGE_USER = "stackdrift"
 PRIVATE_PACKAGE_USER = "stackdrift-firmware"
+DEFAULT_OCI_REGISTRY = "ghcr.io"
+DEFAULT_OCI_OWNER = "dephekt"
+DEFAULT_OCI_PACKAGE_PREFIX = "grow-fleet-firmware"
+OCI_ARTIFACT_TYPE = "application/vnd.stackdrift.grow-firmware.v1"
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.stackdrift.grow-firmware.manifest.v1+json"
 PACKAGE_LIST_PAGE_SIZE = 50
 EDGE_VERSION_RE = re.compile(r"^edge-(?P<created>\d{8}T\d{6}Z)-(?P<sha>[0-9a-f]{7,40})$")
 
@@ -216,14 +222,97 @@ def prune_edge_packages(
     return candidates
 
 
+def oci_package_name(package_prefix: str, package: str) -> str:
+    return f"{package_prefix}-{package}".lower()
+
+
+def oci_repository(registry: str, owner: str, package_prefix: str, package: str) -> str:
+    return f"{registry.rstrip('/')}/{owner}/{oci_package_name(package_prefix, package)}"
+
+
+def oci_ref(registry: str, owner: str, package_prefix: str, package: str, version: str) -> str:
+    return f"{oci_repository(registry, owner, package_prefix, package)}:{version}"
+
+
+def publish_device_oci(
+    dist_root: Path,
+    device: str,
+    registry: str,
+    owner: str,
+    package_prefix: str,
+) -> None:
+    device_dir = dist_root / device
+    manifest_path = device_dir / f"{device}.manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"missing manifest: {manifest_path}")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("flashable") is not True:
+        raise ValueError(f"refusing to publish non-flashable manifest: {manifest_path}")
+
+    package = str(manifest["package"])
+    version = str(manifest["version"])
+    target = oci_ref(registry, owner, package_prefix, package, version)
+    args = ["oras", "push", target, "--artifact-type", OCI_ARTIFACT_TYPE]
+    for filename in manifest["artifact_filenames"]:
+        args.append(f"{device_dir / str(filename)}:application/octet-stream")
+    args.append(f"{manifest_path}:{OCI_MANIFEST_MEDIA_TYPE}")
+    subprocess.run(args, check=True)
+
+
+def list_oci_tags(registry: str, owner: str, package_prefix: str, package: str) -> list[str]:
+    repository = oci_repository(registry, owner, package_prefix, package)
+    completed = subprocess.run(
+        ["oras", "repo", "tags", repository],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip() and not line.startswith("Tags for ")]
+
+
+def prune_edge_oci_packages(registry: str, owner: str, package_prefix: str, package: str, keep: int) -> list[str]:
+    candidates = edge_cleanup_candidates(list_oci_tags(registry, owner, package_prefix, package), keep)
+    for version in candidates:
+        subprocess.run(
+            ["oras", "manifest", "delete", "--force", oci_ref(registry, owner, package_prefix, package, version)],
+            check=True,
+        )
+    return candidates
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Publish packaged firmware artifacts to Forgejo.")
+    parser = argparse.ArgumentParser(description="Publish packaged firmware artifacts.")
     parser.add_argument("devices", nargs="+", help="Device names to publish.")
     parser.add_argument("--dist-root", default="dist", help="Directory containing packaged artifacts.")
     parser.add_argument(
+        "--provider",
+        choices=["ghcr-oci", "forgejo-generic"],
+        default=os.environ.get("PACKAGE_PROVIDER", "ghcr-oci"),
+        help="Artifact backend to publish to.",
+    )
+    parser.add_argument(
+        "--oci-registry",
+        default=os.environ.get("OCI_REGISTRY", DEFAULT_OCI_REGISTRY),
+        help="OCI registry for firmware artifacts.",
+    )
+    parser.add_argument(
+        "--oci-owner",
+        default=os.environ.get("OCI_OWNER", DEFAULT_OCI_OWNER),
+        help="OCI registry owner/namespace for firmware artifacts.",
+    )
+    parser.add_argument(
+        "--oci-package-prefix",
+        default=os.environ.get("OCI_PACKAGE_PREFIX", DEFAULT_OCI_PACKAGE_PREFIX),
+        help="Prefix for per-device OCI firmware package names.",
+    )
+    parser.add_argument(
         "--base-url",
         default="https://codeberg.org",
-        help="Forgejo base URL.",
+        help="Forgejo base URL for forgejo-generic publishing.",
     )
     parser.add_argument(
         "--package-user",
@@ -253,6 +342,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    dist_root = Path(args.dist_root)
+    if args.provider == "ghcr-oci":
+        for device in args.devices:
+            publish_device_oci(dist_root, device, args.oci_registry, args.oci_owner, args.oci_package_prefix)
+            if args.prune_edge:
+                manifest_path = dist_root / device / f"{device}.manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                removed = prune_edge_oci_packages(
+                    args.oci_registry,
+                    args.oci_owner,
+                    args.oci_package_prefix,
+                    str(manifest["package"]),
+                    args.keep_edge,
+                )
+                for version in removed:
+                    print(f"pruned edge package {manifest['package']} {version}")
+        return
+
     package_token = os.environ.get("PACKAGE_TOKEN")
     forgejo_token = os.environ.get("FORGEJO_TOKEN")
     token = package_token or forgejo_token
@@ -269,7 +376,6 @@ def main() -> None:
     if not auth_user:
         auth_user = args.package_user
 
-    dist_root = Path(args.dist_root)
     for device in args.devices:
         if args.preflight_only:
             manifest_path = dist_root / device / f"{device}.manifest.json"

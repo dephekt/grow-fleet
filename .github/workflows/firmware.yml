@@ -1,0 +1,240 @@
+name: firmware
+
+env:
+  PLATFORMIO_CORE_DIR: ${{ github.workspace }}/.platformio
+  OCI_REGISTRY: ghcr.io
+  OCI_OWNER: dephekt
+  OCI_PACKAGE_PREFIX: grow-fleet-firmware
+
+on:
+  pull_request:
+    paths:
+      - "assets/**"
+      - "devices/**"
+      - "fleet.yaml"
+      - "scripts/**"
+      - ".github/workflows/firmware.yml"
+  push: {}
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Optional device to compile"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  pr_prepare:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_devices: ${{ steps.matrix.outputs.has_devices }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - id: matrix
+        run: |
+          MATRIX="$(python3 scripts/impacted_devices.py --base '${{ github.event.pull_request.base.sha }}' --head '${{ github.event.pull_request.head.sha }}' --matrix)"
+          HAS_DEVICES="$(MATRIX="$MATRIX" python3 -c 'import json, os; payload = json.loads(os.environ["MATRIX"]); print("true" if payload.get("include") else "false")')"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "has_devices=$HAS_DEVICES" >> "$GITHUB_OUTPUT"
+
+  pr_compile:
+    if: github.event_name == 'pull_request' && needs.pr_prepare.outputs.has_devices == 'true'
+    needs: pr_prepare
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    strategy:
+      matrix: ${{ fromJson(needs.pr_prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile impacted device
+        run: |
+          rm -f devices/secrets.yaml
+          python3 scripts/compile_devices.py "${{ matrix.device }}"
+
+  main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - id: publish_ready
+        name: Check protected publish configuration
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_SECRETS_YAML_B64:-}" ]; then
+            echo "::notice::Skipping private firmware publish until FLEET_SECRETS_YAML_B64 is configured"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
+
+      - id: edge_meta
+        name: Build edge firmware metadata
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: |
+          sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          version="edge-$(date -u +%Y%m%dT%H%M%SZ)-$short_sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install protected firmware secrets
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: python3 scripts/install_firmware_secrets.py --require-flashable
+
+      - name: Compile release devices for edge
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: python3 scripts/compile_devices.py --all --release-only --firmware-version "${{ steps.edge_meta.outputs.version }}"
+
+      - name: Package edge devices
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: |
+          devices="$(python3 scripts/list_devices.py --release-only)"
+          for device in $devices; do
+            base_file="$(mktemp)"
+            python3 scripts/edge_changelog_base.py "$device" \
+              --exclude-version "${{ steps.edge_meta.outputs.version }}" > "$base_file"
+            base_ref="$(sed -n 's/^source_sha=//p' "$base_file")"
+            base_version="$(sed -n 's/^version=//p' "$base_file")"
+            rm -f "$base_file"
+            set --
+            if [ -n "$base_ref" ]; then
+              set -- --changelog-base-ref "$base_ref" --changelog-base-version "$base_version"
+            fi
+            python3 scripts/package_device.py "$device" \
+              --version "${{ steps.edge_meta.outputs.version }}" \
+              --channel edge \
+              --source-sha "${{ steps.edge_meta.outputs.sha }}" \
+              --build-profile site-private \
+              --require-flashable-secrets \
+              "$@"
+          done
+
+      - name: Publish edge devices
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: |
+          devices="$(python3 scripts/list_devices.py --release-only)"
+          python3 scripts/publish_packages.py --prune-edge --keep-edge 10 $devices
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/firmware/')
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - id: publish_ready
+        name: Check protected publish configuration
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_SECRETS_YAML_B64:-}" ]; then
+            echo "::notice::Skipping private firmware publish until FLEET_SECRETS_YAML_B64 is configured"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
+
+      - id: meta
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: |
+          tag="$GITHUB_REF_NAME"
+          rest="${tag#firmware/}"
+          device="${rest%%/v*}"
+          version="${tag#firmware/$device/}"
+          sha="$(git rev-parse HEAD)"
+          echo "device=$device" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Install protected firmware secrets
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: python3 scripts/install_firmware_secrets.py --require-flashable
+
+      - name: Compile release device
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: python3 scripts/compile_devices.py "${{ steps.meta.outputs.device }}" --firmware-version "${{ steps.meta.outputs.version }}"
+
+      - name: Package release device
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: |
+          python3 scripts/package_device.py "${{ steps.meta.outputs.device }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --channel stable \
+            --source-sha "${{ steps.meta.outputs.sha }}" \
+            --build-profile site-private \
+            --require-flashable-secrets
+
+      - name: Publish release device
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: python3 scripts/publish_packages.py "${{ steps.meta.outputs.device }}"
+
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/esphome/esphome:2026.5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile requested devices
+        run: |
+          rm -f devices/secrets.yaml
+          if [ -n "${{ inputs.device }}" ]; then
+            python3 scripts/compile_devices.py "${{ inputs.device }}"
+          else
+            python3 scripts/compile_devices.py --all
+          fi

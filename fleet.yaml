@@ -1,7 +1,7 @@
 component_dependency: &stackdrift_esphome_components
   source:
     type: git
-    url: https://codeberg.org/stackdrift/esphome-components.git
+    url: https://github.com/dephekt/esphome-components.git
     ref: 798fa7268b5940f1dcfef3ff05e601e5b004fe81
     path: .
 
