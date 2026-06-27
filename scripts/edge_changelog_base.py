@@ -90,6 +90,7 @@ def download_oci_manifest(
                 oci_ref(registry, owner, package_prefix, package, version),
             ],
             check=True,
+            stdout=subprocess.DEVNULL,
         )
         payload = json.loads((output_dir / manifest_filename).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
