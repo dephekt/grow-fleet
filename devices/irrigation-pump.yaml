@@ -1,0 +1,381 @@
+# Athom Smart Plug US V2 — Irrigation pump actuator.
+#
+# Hardware (Athom Smart Plug US V2):
+#   SoC:    ESP8285 (ESP8266 core, 2 MB flash)
+#   Relay:  GPIO12
+#   Button: GPIO5  (active-low, INPUT_PULLUP)
+#   LED:    GPIO13 (status_led, inverted — LOW = ON)
+#   Power:  CSE7766 via UART RX (4800 baud, EVEN parity)
+#
+# Safety contract:
+#   - relay restore_mode: ALWAYS_OFF  — power blip can never start the pump.
+#   - Hard watchdog: on_turn_on delay 150 s -> turn_off (absolute max-on cap,
+#     longer than the max script pulse of 120 s).
+#   - Script mode: restart — re-trigger resets the window, not starts a second.
+#
+# Flash / build:
+#   esphome compile devices/irrigation-pump.yaml
+#   esphome run     devices/irrigation-pump.yaml --device /dev/ttyUSB0
+#   esphome logs    devices/irrigation-pump.yaml --device /dev/ttyUSB0
+
+substitutions:
+  devicename: irrigation-pump
+  friendlyname: "Irrigation Pump"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
+  sensor_update_interval: "10s"
+  current_limit: "16"
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.irrigation-pump
+    version: ${firmware_version}
+  # ESP8285 has 2 MB flash; lock to that ld script so PIO doesn't auto-pick 4 MB.
+  platformio_options:
+    board_upload.flash_size: 2MB
+    board_upload.maximum_size: 2097152
+    board_build.ldscript: eagle.flash.2m.ld
+
+esp8266:
+  board: esp8285
+  restore_from_flash: true
+
+preferences:
+  flash_write_interval: 5min
+
+logger:
+  level: INFO
+  # CSE7766 lives on the hardware UART (RX); baud_rate 0 disables the serial
+  # logger so it doesn't fight the power-meter UART.
+  baud_rate: 0
+
+api:
+  # NOTE: API encryption adds ~7 KB of heap on ESP8266. Left unencrypted to
+  # match the rest of the fleet (no HA in the control path; MQTT is primary).
+  # If HA integration is needed later, add encryption key here.
+
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+  # ESP8266 cannot verify TLS certificates (no cert store in firmware).
+  verify_ssl: false
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# MQTT -> site broker. Coexists with api: above.
+# Discovery scoped to grow/daniel-home/_discovery so grow-app can derive
+# entities from retained payloads without a global homeassistant/# prefix.
+mqtt:
+  broker: 192.168.8.3              # media-server LAN IP; mosquitto-site :1883
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/irrigation-pump
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/irrigation-pump/debug
+    level: NONE
+  on_connect:
+    - delay: 2s
+    - mqtt.publish:
+        topic: grow/daniel-home/irrigation-pump/_firmware/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "irrigation-pump",
+            "projectName": "stackdrift.irrigation-pump",
+            "packageOwner": "${package_owner}",
+            "package": "irrigation-pump",
+            "device": "irrigation-pump",
+            "chipFamily": "ESP8266",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/irrigation-pump/manifest"
+          }
+    - mqtt.publish:
+        topic: grow/daniel-home/irrigation-pump/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "irrigation-pump",
+            "groups": [
+              { "id": "overview", "title": "Irrigation", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "controls", "title": "Controls", "order": 20, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
+              { "id": "settings", "title": "Settings", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor",        "objectId": "pump_power",          "group": "overview",     "role": "metric",        "order": 10, "label": "Pump Power" },
+              { "component": "sensor",        "objectId": "voltage",             "group": "overview",     "role": "metric",        "order": 20 },
+              { "component": "sensor",        "objectId": "current",             "group": "overview",     "role": "metric",        "order": 30 },
+              { "component": "sensor",        "objectId": "total_daily_energy",  "group": "overview",     "role": "metric",        "order": 40, "label": "Daily Energy" },
+              { "component": "button",        "objectId": "irrigate_now",        "group": "controls",     "role": "quick-control", "order": 10 },
+              { "component": "number",        "objectId": "irrigation_duration", "group": "controls",     "role": "quick-control", "order": 20, "label": "Duration (s)" },
+              { "component": "switch",        "objectId": "irrigation_pump",     "group": "settings",     "order": 10, "label": "Relay (manual)" },
+              { "component": "button",        "objectId": "check_firmware_update","group": "maintenance", "order": 10 },
+              { "component": "button",        "objectId": "restart",             "group": "maintenance",  "order": 20 },
+              { "component": "sensor",        "objectId": "wifi_signal",  "group": "diagnostics",  "order": 10 },
+              { "component": "sensor",        "objectId": "uptime",       "group": "diagnostics",  "order": 20 },
+              { "component": "text_sensor",   "objectId": "ip_address",          "group": "diagnostics",  "order": 30 }
+            ]
+          }
+
+# NOTE: web_server v2 used here. v3 requires considerably more flash/RAM for
+# its bundled React UI assets; ESP8285 (2 MB flash, ~80 KB heap after wifi/ssl)
+# becomes tight. v2 is the safe choice for 8266-class hardware.
+web_server:
+  version: 2
+  port: 80
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+# ─── Power metering (CSE7766) ─────────────────────────────────────────────────
+# Calibration: Athom ships NO explicit calibration multipliers for the CSE7766
+# in their published config — only the throttle/clamp filters below. Do not
+# invent numbers; the chip's factory cal is used directly.
+uart:
+  rx_pin: RX
+  baud_rate: 4800
+  parity: EVEN
+
+globals:
+  - id: total_energy_accum
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+
+sensor:
+  - platform: cse7766
+    current:
+      name: "Current"
+      id: plug_current
+      icon: mdi:current-ac
+      filters:
+        - throttle_average: ${sensor_update_interval}
+        # Suppress noise below 60 mA (relay leakage)
+        - lambda: if (x < 0.060) return 0.0; else return x;
+      on_value_range:
+        - above: ${current_limit}
+          then:
+            - switch.turn_off: pump_relay
+
+    voltage:
+      name: "Voltage"
+      id: plug_voltage
+      icon: mdi:sine-wave
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+    power:
+      name: "Pump Power"
+      id: pump_power
+      icon: mdi:pump
+      filters:
+        - throttle_average: ${sensor_update_interval}
+        # Suppress standby noise below 3 W
+        - lambda: if (x < 3.0) return 0.0; else return x;
+
+    energy:
+      name: "Energy"
+      id: energy_sensor
+      icon: mdi:lightning-bolt
+      unit_of_measurement: kWh
+      filters:
+        - throttle: ${sensor_update_interval}
+        - multiply: 0.001
+      on_value:
+        then:
+          - lambda: |-
+              static float prev = 0.0;
+              float cur = id(energy_sensor).state;
+              id(total_energy_accum) += cur - prev;
+              prev = cur;
+              id(total_energy_template).update();
+
+    apparent_power:
+      name: "Apparent Power"
+      icon: mdi:power
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+    power_factor:
+      name: "Power Factor"
+      icon: mdi:percent-outline
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+  - platform: template
+    name: "Total Energy"
+    id: total_energy_template
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    icon: mdi:lightning-bolt
+    accuracy_decimals: 3
+    lambda: |-
+      return id(total_energy_accum);
+    update_interval: ${sensor_update_interval}
+
+  - platform: total_daily_energy
+    name: "Total Daily Energy"
+    id: daily_energy_sensor
+    restore: true
+    power_id: pump_power
+    unit_of_measurement: kWh
+    icon: mdi:hours-24
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_sensor
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    update_interval: 60s
+    entity_category: diagnostic
+
+# ─── Status LED (GPIO13, active-low) ─────────────────────────────────────────
+light:
+  - platform: status_led
+    name: "Status LED"
+    id: blue_led
+    disabled_by_default: true
+    pin:
+      number: GPIO13
+      inverted: true
+
+# ─── Relay — Irrigation Pump ──────────────────────────────────────────────────
+switch:
+  - platform: gpio
+    name: "Irrigation Pump"
+    id: pump_relay
+    pin: GPIO12
+    # ALWAYS_OFF: a reboot or power blip must NEVER start the pump.
+    restore_mode: ALWAYS_OFF
+    icon: mdi:water-pump
+    on_turn_on:
+      # Hard watchdog: unconditionally turn the relay off after 150 s.
+      # This fires even if the relay was turned on directly (bypassing the
+      # script), capping the absolute max-on time regardless of cause.
+      # 150 s > max script pulse (120 s) so a legitimate full-duration run
+      # completes before the watchdog fires.
+      - delay: 150s
+      - switch.turn_off: pump_relay
+
+# ─── Irrigation Duration ──────────────────────────────────────────────────────
+number:
+  - platform: template
+    name: "Irrigation Duration"
+    id: irrigation_seconds
+    min_value: 5
+    max_value: 120
+    step: 5
+    initial_value: 60
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: s
+    icon: mdi:timer-outline
+    mode: slider
+
+# ─── Irrigate Now button ──────────────────────────────────────────────────────
+button:
+  - platform: template
+    name: "Irrigate Now"
+    id: irrigate_now
+    icon: mdi:water
+    on_press:
+      - script.execute: irrigate
+
+  - platform: template
+    name: "Check Firmware Update"
+    id: check_firmware_update
+    entity_category: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+
+  - platform: restart
+    name: "Restart"
+    id: restart_button
+    entity_category: diagnostic
+
+  # Keep factory reset accessible via long-press but hidden from MQTT/discovery.
+  - platform: factory_reset
+    name: "Factory Reset"
+    id: factory_reset_button
+    internal: true
+
+# ─── Physical button (GPIO5) ─────────────────────────────────────────────────
+# Short press: toggle relay (manual override; watchdog still applies).
+# Long press 4 s: factory reset (Athom pattern).
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 5
+      mode: INPUT_PULLUP
+      inverted: true
+    id: power_button
+    name: "Power Button"
+    disabled_by_default: true
+    on_multi_click:
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.2s
+        then:
+          - switch.toggle: pump_relay
+      - timing:
+          - ON for at least 4s
+        then:
+          - button.press: factory_reset_button
+
+  - platform: status
+    name: "API Status"
+    entity_category: diagnostic
+
+# ─── Irrigation script ────────────────────────────────────────────────────────
+# mode: restart — if fired while already running, the current delay is
+# cancelled and the window resets from the beginning.
+script:
+  - id: irrigate
+    mode: restart
+    then:
+      - switch.turn_on: pump_relay
+      - delay: !lambda "return id(irrigation_seconds).state * 1000;"
+      - switch.turn_off: pump_relay
+
+# ─── Diagnostics ─────────────────────────────────────────────────────────────
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      id: ip_address
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC Address"
+      entity_category: diagnostic

@@ -1,0 +1,341 @@
+# Athom Smart Plug US V2 — Runoff bilge-pump monitor.
+#
+# Hardware (Athom Smart Plug US V2):
+#   SoC:    ESP8285 (ESP8266 core, 2 MB flash)
+#   Relay:  GPIO12
+#   Button: GPIO5  (active-low, INPUT_PULLUP)
+#   LED:    GPIO13 (status_led, inverted — LOW = ON)
+#   Power:  CSE7766 via UART RX (4800 baud, EVEN parity)
+#
+# Purpose:
+#   This plug monitors the AC bilge pump in the runoff collection box.
+#   The relay is ALWAYS_ON and INTERNAL — it must never be switched off.
+#   The bilge pump is a safety pump (float-switched); killing its power
+#   would prevent automatic drainage of irrigation overflow.
+#   The plug is purely for telemetry: power draw detects pump cycling,
+#   enabling closed-loop confirmation that irrigation produced runoff and
+#   alerting on runoff without a preceding irrigation (potential leak).
+#
+# Flash / build:
+#   esphome compile devices/runoff-monitor.yaml
+#   esphome run     devices/runoff-monitor.yaml --device /dev/ttyUSB0
+#   esphome logs    devices/runoff-monitor.yaml --device /dev/ttyUSB0
+
+substitutions:
+  devicename: runoff-monitor
+  friendlyname: "Runoff Monitor"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
+  sensor_update_interval: "10s"
+  current_limit: "16"
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.runoff-monitor
+    version: ${firmware_version}
+  platformio_options:
+    board_upload.flash_size: 2MB
+    board_upload.maximum_size: 2097152
+    board_build.ldscript: eagle.flash.2m.ld
+
+esp8266:
+  board: esp8285
+  restore_from_flash: true
+
+preferences:
+  flash_write_interval: 5min
+
+logger:
+  level: INFO
+  # CSE7766 lives on the hardware UART (RX); baud_rate 0 disables the serial
+  # logger so it doesn't fight the power-meter UART.
+  baud_rate: 0
+
+api:
+
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+  # ESP8266 cannot verify TLS certificates (no cert store in firmware).
+  verify_ssl: false
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# MQTT -> site broker. Coexists with api: above.
+mqtt:
+  broker: 192.168.8.3              # media-server LAN IP; mosquitto-site :1883
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/runoff-monitor
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/runoff-monitor/debug
+    level: NONE
+  on_connect:
+    - delay: 2s
+    - mqtt.publish:
+        topic: grow/daniel-home/runoff-monitor/_firmware/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "runoff-monitor",
+            "projectName": "stackdrift.runoff-monitor",
+            "packageOwner": "${package_owner}",
+            "package": "runoff-monitor",
+            "device": "runoff-monitor",
+            "chipFamily": "ESP8266",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/runoff-monitor/manifest"
+          }
+    - mqtt.publish:
+        topic: grow/daniel-home/runoff-monitor/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "runoff-monitor",
+            "groups": [
+              { "id": "overview", "title": "Runoff", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "status", "title": "Pump Status", "order": 20, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor",        "objectId": "runoff_pump_power",    "group": "overview",  "role": "metric",  "order": 10, "label": "Runoff Pump Power" },
+              { "component": "sensor",        "objectId": "voltage",              "group": "overview",  "role": "metric",  "order": 20 },
+              { "component": "sensor",        "objectId": "current",              "group": "overview",  "role": "metric",  "order": 30 },
+              { "component": "sensor",        "objectId": "total_daily_energy",   "group": "overview",  "role": "metric",  "order": 40, "label": "Daily Energy" },
+              { "component": "binary_sensor", "objectId": "runoff_pump_running",  "group": "status",    "role": "metric",  "order": 10, "label": "Runoff Pump Running" },
+              { "component": "button",        "objectId": "check_firmware_update","group": "maintenance","order": 10 },
+              { "component": "button",        "objectId": "restart",              "group": "maintenance","order": 20 },
+              { "component": "sensor",        "objectId": "wifi_signal",   "group": "diagnostics","order": 10 },
+              { "component": "sensor",        "objectId": "uptime",        "group": "diagnostics","order": 20 },
+              { "component": "text_sensor",   "objectId": "ip_address",           "group": "diagnostics","order": 30 }
+            ]
+          }
+
+# NOTE: web_server v2 used here — same reasoning as irrigation-pump.yaml.
+# ESP8285 (2 MB flash) is too constrained for the v3 React bundle.
+web_server:
+  version: 2
+  port: 80
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+# ─── Power metering (CSE7766) ─────────────────────────────────────────────────
+uart:
+  rx_pin: RX
+  baud_rate: 4800
+  parity: EVEN
+
+globals:
+  - id: total_energy_accum
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+
+sensor:
+  - platform: cse7766
+    current:
+      name: "Current"
+      id: plug_current
+      icon: mdi:current-ac
+      filters:
+        - throttle_average: ${sensor_update_interval}
+        - lambda: if (x < 0.060) return 0.0; else return x;
+      on_value_range:
+        - above: ${current_limit}
+          then:
+            # Over-current: log but do NOT turn off relay (safety pump must stay on).
+            - logger.log:
+                format: "Runoff monitor: over-current %.2f A — relay intentionally kept ON (safety pump)"
+                args: ["x"]
+
+    voltage:
+      name: "Voltage"
+      id: plug_voltage
+      icon: mdi:sine-wave
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+    power:
+      name: "Runoff Pump Power"
+      id: runoff_pump_power
+      icon: mdi:pump
+      filters:
+        - throttle_average: ${sensor_update_interval}
+        - lambda: if (x < 3.0) return 0.0; else return x;
+
+    energy:
+      name: "Energy"
+      id: energy_sensor
+      icon: mdi:lightning-bolt
+      unit_of_measurement: kWh
+      filters:
+        - throttle: ${sensor_update_interval}
+        - multiply: 0.001
+      on_value:
+        then:
+          - lambda: |-
+              static float prev = 0.0;
+              float cur = id(energy_sensor).state;
+              id(total_energy_accum) += cur - prev;
+              prev = cur;
+              id(total_energy_template).update();
+
+    apparent_power:
+      name: "Apparent Power"
+      icon: mdi:power
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+    power_factor:
+      name: "Power Factor"
+      icon: mdi:percent-outline
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+  - platform: template
+    name: "Total Energy"
+    id: total_energy_template
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    icon: mdi:lightning-bolt
+    accuracy_decimals: 3
+    lambda: |-
+      return id(total_energy_accum);
+    update_interval: ${sensor_update_interval}
+
+  - platform: total_daily_energy
+    name: "Total Daily Energy"
+    id: daily_energy_sensor
+    restore: true
+    power_id: runoff_pump_power
+    unit_of_measurement: kWh
+    icon: mdi:hours-24
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_sensor
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    update_interval: 60s
+    entity_category: diagnostic
+
+# ─── Status LED (GPIO13, active-low) ─────────────────────────────────────────
+light:
+  - platform: status_led
+    name: "Status LED"
+    id: blue_led
+    disabled_by_default: true
+    pin:
+      number: GPIO13
+      inverted: true
+
+# ─── Relay — always on, internal, not published ───────────────────────────────
+# internal: true prevents discovery/MQTT publication. The relay must ALWAYS
+# stay powered — it feeds the bilge pump's float switch circuit.
+# ALWAYS_ON ensures power-cycle never kills the safety pump.
+switch:
+  - platform: gpio
+    name: "Runoff Relay"
+    id: runoff_relay
+    pin: GPIO12
+    restore_mode: ALWAYS_ON
+    internal: true
+
+# ─── Runoff pump running detection ────────────────────────────────────────────
+# The bilge pump draws >20 W when running. delayed_off: 5s prevents chattering
+# on pump startup/shutdown transients from the float switch.
+# Threshold chosen conservatively: idle draw < 3 W (suppressed by power lambda
+# above), pump running typically 40-150 W depending on model.
+binary_sensor:
+  - platform: template
+    name: "Runoff Pump Running"
+    id: runoff_pump_running
+    icon: mdi:pump
+    device_class: running
+    lambda: |-
+      return id(runoff_pump_power).state > 20.0;
+    filters:
+      - delayed_off: 5s
+
+  # Physical button: short press does nothing useful here (relay must stay on),
+  # so we disable it from discovery and only wire long-press to factory reset.
+  - platform: gpio
+    pin:
+      number: 5
+      mode: INPUT_PULLUP
+      inverted: true
+    id: power_button
+    name: "Power Button"
+    disabled_by_default: true
+    on_multi_click:
+      - timing:
+          - ON for at least 4s
+        then:
+          - button.press: factory_reset_button
+
+  - platform: status
+    name: "API Status"
+    entity_category: diagnostic
+
+# ─── Buttons ─────────────────────────────────────────────────────────────────
+button:
+  - platform: template
+    name: "Check Firmware Update"
+    id: check_firmware_update
+    entity_category: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+
+  - platform: restart
+    name: "Restart"
+    id: restart_button
+    entity_category: diagnostic
+
+  - platform: factory_reset
+    name: "Factory Reset"
+    id: factory_reset_button
+    internal: true
+
+# ─── Diagnostics ─────────────────────────────────────────────────────────────
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      id: ip_address
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC Address"
+      entity_category: diagnostic
