@@ -43,5 +43,8 @@ Workflow behavior:
 - If `FLEET_SECRETS_YAML_B64` is not configured yet, trusted publish jobs skip
   the protected firmware build instead of failing the first migration push.
 
-GitHub-hosted runners do not use a runner-local firmware cache. Private GHCR
-OCI artifacts are the durable release output.
+GitHub-hosted runners cache the PlatformIO core directory with GitHub Actions
+cache to reuse downloaded platforms, packages, and toolchains between runs.
+They do not cache `devices/.esphome/build`: protected firmware builds embed
+site secrets in the compiled binaries. Private GHCR OCI artifacts are the
+durable release output.

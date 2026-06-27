@@ -23,6 +23,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -64,6 +68,23 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.2.0
+
+      - id: platformio_cache_key
+        name: Compute PlatformIO cache key
+        run: |
+          set -eu
+          digest="$(git ls-files -z -- 'devices/*.yaml' fleet.yaml pyproject.toml uv.lock | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+          echo "key=platformio-${RUNNER_OS}-esphome-2026.5-$digest" >> "$GITHUB_OUTPUT"
+          echo "restore-key=platformio-${RUNNER_OS}-esphome-2026.5-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore PlatformIO cache
+        id: platformio_cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
+          restore-keys: |
+            ${{ steps.platformio_cache_key.outputs.restore-key }}
 
       - name: Compile impacted device
         run: |
@@ -140,9 +161,35 @@ jobs:
           FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
         run: uv run --locked python scripts/install_firmware_secrets.py --require-flashable
 
+      - id: platformio_cache_key
+        name: Compute PlatformIO cache key
+        if: steps.publish_ready.outputs.ready == 'true' && steps.edge_devices.outputs.has_devices == 'true'
+        run: |
+          set -eu
+          digest="$(git ls-files -z -- 'devices/*.yaml' fleet.yaml pyproject.toml uv.lock | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+          echo "key=platformio-${RUNNER_OS}-esphome-2026.5-$digest" >> "$GITHUB_OUTPUT"
+          echo "restore-key=platformio-${RUNNER_OS}-esphome-2026.5-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore PlatformIO cache
+        id: platformio_cache
+        if: steps.publish_ready.outputs.ready == 'true' && steps.edge_devices.outputs.has_devices == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
+          restore-keys: |
+            ${{ steps.platformio_cache_key.outputs.restore-key }}
+
       - name: Compile release devices for edge
         if: steps.publish_ready.outputs.ready == 'true' && steps.edge_devices.outputs.has_devices == 'true'
         run: uv run --locked python scripts/compile_devices.py ${{ steps.edge_devices.outputs.devices }} --firmware-version "${{ steps.edge_meta.outputs.version }}"
+
+      - name: Save PlatformIO cache
+        if: steps.publish_ready.outputs.ready == 'true' && steps.edge_devices.outputs.has_devices == 'true' && steps.platformio_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
 
       - name: Package edge devices
         if: steps.publish_ready.outputs.ready == 'true' && steps.edge_devices.outputs.has_devices == 'true'
@@ -231,9 +278,35 @@ jobs:
           FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
         run: uv run --locked python scripts/install_firmware_secrets.py --require-flashable
 
+      - id: platformio_cache_key
+        name: Compute PlatformIO cache key
+        if: steps.publish_ready.outputs.ready == 'true'
+        run: |
+          set -eu
+          digest="$(git ls-files -z -- 'devices/*.yaml' fleet.yaml pyproject.toml uv.lock | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+          echo "key=platformio-${RUNNER_OS}-esphome-2026.5-$digest" >> "$GITHUB_OUTPUT"
+          echo "restore-key=platformio-${RUNNER_OS}-esphome-2026.5-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore PlatformIO cache
+        id: platformio_cache
+        if: steps.publish_ready.outputs.ready == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
+          restore-keys: |
+            ${{ steps.platformio_cache_key.outputs.restore-key }}
+
       - name: Compile release device
         if: steps.publish_ready.outputs.ready == 'true'
         run: uv run --locked python scripts/compile_devices.py "${{ steps.meta.outputs.device }}" --firmware-version "${{ steps.meta.outputs.version }}"
+
+      - name: Save PlatformIO cache
+        if: steps.publish_ready.outputs.ready == 'true' && steps.platformio_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
 
       - name: Package release device
         if: steps.publish_ready.outputs.ready == 'true'
@@ -261,6 +334,23 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.2.0
 
+      - id: platformio_cache_key
+        name: Compute PlatformIO cache key
+        run: |
+          set -eu
+          digest="$(git ls-files -z -- 'devices/*.yaml' fleet.yaml pyproject.toml uv.lock | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+          echo "key=platformio-${RUNNER_OS}-esphome-2026.5-$digest" >> "$GITHUB_OUTPUT"
+          echo "restore-key=platformio-${RUNNER_OS}-esphome-2026.5-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore PlatformIO cache
+        id: platformio_cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
+          restore-keys: |
+            ${{ steps.platformio_cache_key.outputs.restore-key }}
+
       - name: Compile requested devices
         run: |
           rm -f devices/secrets.yaml
@@ -269,3 +359,10 @@ jobs:
           else
             uv run --locked python scripts/compile_devices.py --all
           fi
+
+      - name: Save PlatformIO cache
+        if: steps.platformio_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .platformio
+          key: ${{ steps.platformio_cache_key.outputs.key }}
