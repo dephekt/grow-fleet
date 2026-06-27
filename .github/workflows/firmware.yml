@@ -5,7 +5,6 @@ env:
   OCI_REGISTRY: ghcr.io
   OCI_OWNER: dephekt
   OCI_PACKAGE_PREFIX: grow-fleet
-  OCI_SOURCE_URL: https://github.com/dephekt/grow-fleet
 
 on:
   pull_request:
