@@ -7,7 +7,8 @@ import subprocess
 import sys
 
 from edge_changelog_base import download_oci_manifest, latest_edge_package
-from fleetlib import changed_paths, device_names, device_spec, impacted_devices
+from firmware_inputs import firmware_impacted_devices
+from fleetlib import changed_paths, device_names, device_spec
 from publish_packages import DEFAULT_OCI_OWNER, DEFAULT_OCI_PACKAGE_PREFIX, DEFAULT_OCI_REGISTRY, list_oci_tags
 
 
@@ -81,7 +82,7 @@ def should_build_device(
         return True
 
     paths = changed_paths(source_sha, head)
-    return device in set(impacted_devices(paths))
+    return device in set(firmware_impacted_devices(paths))
 
 
 def edge_build_devices(
