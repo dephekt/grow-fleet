@@ -260,9 +260,9 @@ def publish_device_oci(
     if source_url:
         args.extend(["--annotation", f"{OCI_SOURCE_ANNOTATION}={source_url}"])
     for filename in manifest["artifact_filenames"]:
-        args.append(f"{device_dir / str(filename)}:application/octet-stream")
-    args.append(f"{manifest_path}:{OCI_MANIFEST_MEDIA_TYPE}")
-    subprocess.run(args, check=True)
+        args.append(f"{filename}:application/octet-stream")
+    args.append(f"{manifest_path.name}:{OCI_MANIFEST_MEDIA_TYPE}")
+    subprocess.run(args, check=True, cwd=device_dir)
 
 
 def list_oci_tags(registry: str, owner: str, package_prefix: str, package: str) -> list[str]:

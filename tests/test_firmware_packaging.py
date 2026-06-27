@@ -143,6 +143,50 @@ class FirmwarePackagingTests(unittest.TestCase):
         run.assert_called_once()
         self.assertIs(run.call_args.kwargs["stdout"], subprocess.DEVNULL)
 
+    def test_download_oci_manifest_finds_nested_oras_artifact_path(self) -> None:
+        def run_oras(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            output_dir = Path(cmd[cmd.index("--output") + 1])
+            manifest_path = output_dir / "dist" / "atoms3u-sensor-rig" / "atoms3u-sensor-rig.manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                json.dumps({"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch("edge_changelog_base.subprocess.run", side_effect=run_oras):
+            manifest = download_oci_manifest(
+                "ghcr.io",
+                "dephekt",
+                "grow-fleet",
+                "atoms3u-sensor-rig",
+                "edge-20260620T190102Z-bbbbbbbbbbbb",
+                "atoms3u-sensor-rig.manifest.json",
+            )
+
+        self.assertEqual(manifest, {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"})
+
+    def test_download_oci_manifest_reports_restored_files_when_missing(self) -> None:
+        def run_oras(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            output_dir = Path(cmd[cmd.index("--output") + 1])
+            artifact_path = output_dir / "dist" / "atoms3u-sensor-rig" / "atoms3u-sensor-rig.ota.bin"
+            artifact_path.parent.mkdir(parents=True)
+            artifact_path.write_bytes(b"ota")
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with (
+            mock.patch("edge_changelog_base.subprocess.run", side_effect=run_oras),
+            self.assertRaisesRegex(FileNotFoundError, "dist/atoms3u-sensor-rig/atoms3u-sensor-rig.ota.bin"),
+        ):
+            download_oci_manifest(
+                "ghcr.io",
+                "dephekt",
+                "grow-fleet",
+                "atoms3u-sensor-rig",
+                "edge-20260620T190102Z-bbbbbbbbbbbb",
+                "atoms3u-sensor-rig.manifest.json",
+            )
+
     def test_edge_cleanup_keeps_newest_versions(self) -> None:
         versions = [
             "v0.1.0",
@@ -214,11 +258,12 @@ class FirmwarePackagingTests(unittest.TestCase):
                 OCI_ARTIFACT_TYPE,
                 "--annotation",
                 "org.opencontainers.image.source=https://github.com/dephekt/grow-fleet",
-                f"{device_dir / 'atoms3u-sensor-rig.ota.bin'}:application/octet-stream",
-                f"{device_dir / 'atoms3u-sensor-rig.factory.bin'}:application/octet-stream",
-                f"{manifest_path}:{OCI_MANIFEST_MEDIA_TYPE}",
+                "atoms3u-sensor-rig.ota.bin:application/octet-stream",
+                "atoms3u-sensor-rig.factory.bin:application/octet-stream",
+                f"atoms3u-sensor-rig.manifest.json:{OCI_MANIFEST_MEDIA_TYPE}",
             ],
             check=True,
+            cwd=device_dir,
         )
 
     def test_publish_device_oci_rejects_non_flashable_manifest(self) -> None:
