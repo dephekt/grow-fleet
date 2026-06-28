@@ -5,7 +5,7 @@
 # Hardware — all I2C on one Grove chain off the AtomS3U's Port A:
 #   M5Stack CO2L    (SCD41)    @ 0x62  -> scd4x + scd4x_stats + scd4x_alerts
 #   M5Stack THERMAL (MLX90640) @ 0x33  -> mlx90640 (+ /thermal.jpg)
-#   M5Stack BPS     (QMP6988)  @ 0x56  -> stock qmp6988
+#   M5Stack BPS     (QMP6988)  @ 0x70  -> qmp6988 (hardened, vendored)
 #   M5Stack DLIGHT (BH1750FVI) @ 0x23  -> stock bh1750
 #
 # Build / flash:
@@ -42,12 +42,13 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 798fa7268b5940f1dcfef3ff05e601e5b004fe81
+      ref: 12d8fd6315ea1957e9efad2d07365014a83b26fa
       path: .
     components:
       - mlx90640
       - scd4x_stats
       - scd4x_alerts
+      - qmp6988
 
 logger:
   level: DEBUG   # DEBUG during bring-up to see the I2C scan + live sensor values
@@ -310,8 +311,9 @@ sensor:
       id: humidity_sensor
       web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 30 }
 
-  # Barometric pressure (QMP6988 / BPS unit) — stock ESPHome component.
-    # This BPS unit answers at 0x70 (confirmed via i2c scan), not 0x56.
+  # Barometric pressure (QMP6988 / BPS unit) — vendored hardened qmp6988 component
+  # (verified init + runtime self-heal + plausibility guard; replaces the stock one).
+  # This BPS unit answers at 0x70 (default/SDO-high; confirmed via i2c scan), not 0x56.
   - platform: qmp6988
     address: 0x70
     update_interval: 60s
