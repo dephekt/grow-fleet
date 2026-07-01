@@ -40,10 +40,11 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 2fb0dfefffd0b41a6451b08c6c13a4dad301ae46
+      ref: e3726dff4897a4bcdd152f1e62b6d9603a1f9155
       path: .
     components:
       - m5stack_thermal2
+      - thermal_camera_core  # shared base AUTO_LOADed by m5stack_thermal2; git sources must list it explicitly
       - scd4x_stats
       - scd4x_alerts
       - qmp6988
