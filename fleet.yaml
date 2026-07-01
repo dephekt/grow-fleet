@@ -34,7 +34,7 @@ devices:
       source:
         type: git
         url: https://github.com/dephekt/esphome-components.git
-        ref: e3726dff4897a4bcdd152f1e62b6d9603a1f9155
+        ref: 5c05226dd0ec880997ed6b917cb16b9f39c8c193
         path: .
   m5stack-airq:
     config: devices/m5stack-airq.yaml
