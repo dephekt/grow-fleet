@@ -4,7 +4,7 @@
 #
 # Hardware — all I2C on one Grove chain off the AtomS3U's Port A:
 #   M5Stack CO2L    (SCD41)    @ 0x62  -> scd4x + scd4x_stats + scd4x_alerts
-#   M5Stack THERMAL (MLX90640) @ 0x33  -> mlx90640 (+ /thermal.jpg)
+#   M5Stack THERMAL2 (MLX90640) @ 0x32  -> m5stack_thermal2 (buzzer/RGB alarm + /thermal.jpg)
 #   M5Stack BPS     (QMP6988)  @ 0x70  -> qmp6988 (hardened, vendored)
 #   M5Stack DLIGHT (BH1750FVI) @ 0x23  -> stock bh1750
 #
@@ -27,8 +27,6 @@ esphome:
   project:
     name: stackdrift.atoms3u-sensor-rig
     version: ${firmware_version}
-  libraries:
-    - Wire          # mlx90640 includes <Wire.h>
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -42,10 +40,10 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 0a4a1e6bb6f04820983a3dcc5109f937e2d78ce5
+      ref: 2fb0dfefffd0b41a6451b08c6c13a4dad301ae46
       path: .
     components:
-      - mlx90640
+      - m5stack_thermal2
       - scd4x_stats
       - scd4x_alerts
       - qmp6988
@@ -214,15 +212,28 @@ web_server:
       name: "Diagnostics"
       sorting_weight: 40
 
-# ---------------- Thermal camera (MLX90640) ----------------
-mlx90640:
+# ---------------- Thermal camera (M5Stack Unit Thermal2) ----------------
+# THERMAL2 = MLX90640 behind a PICO-D4 at 0x32, plus a buzzer + RGB LED. The
+# software alarm beeps the buzzer and flashes the RGB red when the monitored
+# average crosses a threshold; the buzzer can be muted from the switch below.
+m5stack_thermal2:
   id: thermal_camera
+  address: 0x32
   refresh_rate: "16Hz"
-  resolution: "18-bit"
-  pattern: "chess"
+  noise_filter: 8
   thermal_palette: "ironblack"
-  single_frame: false
   update_interval: 2000           # milliseconds (component uses a raw int)
+  status_led: true                # green healthy / blue ROI mode / flashing red alarm
+  alarm:
+    source: average               # alarm on the average temperature
+    region: active                # whole-frame, or the ROI when ROI mode is on
+    high_threshold: 32.0
+    low_threshold: 12.0
+    hysteresis: 0.5
+    buzzer_frequency: 4000
+    buzzer_volume: 96
+    beep_interval: 250            # ms on/off -> a repeating series of beeps
+    led_color: [16, 0, 0]        # red flash
   web_server:
     enable: true
     path: "/thermal.jpg"
@@ -291,6 +302,28 @@ mlx90640:
   web_overlay_enabled_control:
     name: "Thermal Overlay Enable"
     web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 75 }
+  # Alarm status + controls
+  alarm_active:
+    name: "Thermal Alarm"
+    id: thermal_alarm_active
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 5 }
+  button:
+    name: "Thermal Button"
+    id: thermal_button
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }
+  alarm_test_button:
+    name: "Thermal Alarm Test"
+    id: thermal_alarm_test
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 6 }
+  buzzer_enabled_control:
+    name: "Thermal Buzzer Enabled"
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 130 }
+  alarm_high_threshold_control:
+    name: "Thermal Alarm High Threshold"
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 140 }
+  alarm_low_threshold_control:
+    name: "Thermal Alarm Low Threshold"
+    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 150 }
 
 # ---------------- Sensors ----------------
 sensor:

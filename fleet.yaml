@@ -28,13 +28,13 @@ devices:
     assets:
       - assets/thermal_overlay.js
     # Pinned ahead of the shared anchor: this rig needs the hardened qmp6988
-    # component, which is not yet in the fleet-wide pin. Re-join the anchor once
-    # the shared pin advances past it.
+    # component and the m5stack_thermal2 driver, neither of which is in the
+    # fleet-wide pin yet. Re-join the anchor once the shared pin advances past it.
     component_dependency:
       source:
         type: git
         url: https://github.com/dephekt/esphome-components.git
-        ref: 0a4a1e6bb6f04820983a3dcc5109f937e2d78ce5
+        ref: 2fb0dfefffd0b41a6451b08c6c13a4dad301ae46
         path: .
   m5stack-airq:
     config: devices/m5stack-airq.yaml
