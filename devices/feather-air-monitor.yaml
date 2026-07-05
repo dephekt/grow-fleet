@@ -8,8 +8,9 @@
 #
 # This node is the REFERENCE tent air temp/RH. It publishes Temperature/Humidity
 # over MQTT; the AtomS3U rig subscribes to them and republishes them as the
-# canonical CLIMATE readings (falling back to its SCD41 if this node goes quiet).
-# The built-in 240x135 IPS ST7789 shows Temp / RH / Air VPD locally.
+# canonical CLIMATE readings. There is NO SCD41 fallback: if this node goes quiet
+# the rig's temp/RH/VPD go unavailable rather than substituting the self-heated
+# SCD41. The built-in 240x135 IPS ST7789 shows Temp / RH / Air VPD locally.
 #
 # Hardware pins (Reverse TFT Feather 5345, from the arduino variant header):
 #   TFT_I2C_POWER = GPIO7   (gates power to BOTH the STEMMA-QT/I²C bus AND the TFT)
@@ -216,9 +217,9 @@ font:
 display:
   - platform: st7789v
     model: Custom
-    # Native panel is 135(w) x 240(h) with a display offset; rotate to landscape.
-    # Dial offset_width/offset_height in on real hardware until the readout fills
-    # the panel with no wraparound (commonly 52/40 for this 240x135 ST7789).
+    # Native panel is 135(w) x 240(h) with a display offset; rotated to landscape.
+    # offset_width/offset_height 52/40 confirmed on hardware — the readout fills
+    # the panel cleanly with no wraparound.
     height: 240
     width: 135
     offset_width: 52
@@ -239,10 +240,10 @@ display:
       if (!isnan(t)) it.printf(6, 20, id(font_big), id(c_white), "%.1f°C", t);
       else           it.printf(6, 20, id(font_big), id(c_dim), "--.-");
 
-      // Top-right: RH
-      it.printf(150, 2, id(font_label), id(c_dim), "RH");
-      if (!isnan(h)) it.printf(150, 20, id(font_big), id(c_white), "%.0f%%", h);
-      else           it.printf(150, 20, id(font_big), id(c_dim), "--");
+      // Top-right: RH (right-aligned so 100% doesn't clip the panel's right edge)
+      it.printf(234, 2, id(font_label), id(c_dim), TextAlign::TOP_RIGHT, "RH");
+      if (!isnan(h)) it.printf(234, 20, id(font_big), id(c_white), TextAlign::TOP_RIGHT, "%.0f%%", h);
+      else           it.printf(234, 20, id(font_big), id(c_dim), TextAlign::TOP_RIGHT, "--");
 
       // Bottom: Air VPD, color-coded by grow band (ok 0.6-1.2, warn outside, alert <0.4/>1.5)
       it.printf(6, 78, id(font_label), id(c_dim), "AIR VPD");
