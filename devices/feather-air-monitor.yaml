@@ -58,6 +58,9 @@ logger:
   hardware_uart: USB_CDC  # ESP32-S2 native USB (no UART bridge)
 
 api:
+  # MQTT is the transport and no HA client connects to the native API, so the
+  # default reboot_timeout (15 min) was rebooting the device every 15 min.
+  reboot_timeout: 0s
 
 ota:
   - platform: esphome
