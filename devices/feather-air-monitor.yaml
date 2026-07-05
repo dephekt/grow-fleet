@@ -1,0 +1,269 @@
+# Canopy air reference — Adafruit ESP32-S2 Reverse TFT Feather (product 5345)
+# with an SHT45 (PTFE) hanging in the tent at canopy level in a Stevenson shield.
+#
+# The controller sits OUTSIDE the tent; the SHT45 reaches it via STEMMA-QT ->
+# SparkFun QwiicBus (I²C-over-differential) -> ethernet -> QwiicBus -> STEMMA-QT.
+# The extenders are transparent, so the SHT45 is just a stock `sht4x` on the
+# Feather's I²C bus (100 kHz for reliability over the long differential run).
+#
+# This node is the REFERENCE tent air temp/RH. It publishes Temperature/Humidity
+# over MQTT; the AtomS3U rig subscribes to them and republishes them as the
+# canonical CLIMATE readings (falling back to its SCD41 if this node goes quiet).
+# The built-in 240x135 IPS ST7789 shows Temp / RH / Air VPD locally.
+#
+# Hardware pins (Reverse TFT Feather 5345, from the arduino variant header):
+#   TFT_I2C_POWER = GPIO7   (gates power to BOTH the STEMMA-QT/I²C bus AND the TFT)
+#   TFT backlight = GPIO45
+#   I²C: SDA=GPIO3  SCL=GPIO4              SHT45 @ 0x44
+#   TFT: CS=GPIO42  DC=GPIO40  RESET=GPIO41  SPI: SCK=GPIO36  MOSI=GPIO35
+#
+# Build / flash:
+#   make build feather-air-monitor
+#   esphome run devices/feather-air-monitor.yaml --device /dev/ttyACM0
+
+substitutions:
+  devicename: feather-air-monitor
+  friendlyname: "Feather Air Monitor"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.feather-air-monitor
+    version: ${firmware_version}
+  on_boot:
+    # Power the STEMMA-QT (I²C) + TFT rail BEFORE the I²C/SPI buses and the SHT45
+    # set up (priority above BUS=1000), so the sensor and screen come up cleanly.
+    # Raw Arduino writes avoid any output-component setup-ordering race.
+    - priority: 1100
+      then:
+        - lambda: |-
+            pinMode(7, OUTPUT);
+            digitalWrite(7, HIGH);    // TFT_I2C_POWER: enable STEMMA-QT (I²C) + TFT power
+            pinMode(45, OUTPUT);
+            digitalWrite(45, HIGH);   // TFT backlight on
+
+esp32:
+  board: adafruit_feather_esp32s2_reversetft
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG            # DEBUG during bring-up to see the I²C scan + live values
+  hardware_uart: USB_CDC  # ESP32-S2 native USB (no UART bridge)
+
+api:
+
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+# MQTT -> site broker (mosquitto-site on media-server), same pattern as the rest
+# of the fleet. HA stays an optional observer via api: above.
+mqtt:
+  broker: 192.168.8.3
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/feather-air-monitor
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/feather-air-monitor/debug
+    level: NONE
+  on_connect:
+    - delay: 2s
+    - mqtt.publish:
+        topic: grow/daniel-home/feather-air-monitor/_firmware/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "feather-air-monitor",
+            "projectName": "stackdrift.feather-air-monitor",
+            "packageOwner": "${package_owner}",
+            "package": "feather-air-monitor",
+            "device": "feather-air-monitor",
+            "chipFamily": "ESP32-S2",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/feather-air-monitor/manifest"
+          }
+    - mqtt.publish:
+        topic: grow/daniel-home/feather-air-monitor/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "feather-air-monitor",
+            "groups": [
+              { "id": "overview", "title": "Canopy Air", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor", "objectId": "temperature", "group": "overview", "role": "metric", "order": 10 },
+              { "component": "sensor", "objectId": "humidity", "group": "overview", "role": "metric", "order": 20 },
+              { "component": "sensor", "objectId": "air_vpd", "group": "overview", "role": "metric", "order": 30, "label": "Air VPD" },
+              { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
+            ]
+          }
+
+web_server:
+  version: 3
+  port: 80
+
+i2c:
+  sda: 3             # STEMMA-QT SDA
+  scl: 4             # STEMMA-QT SCL
+  frequency: 100kHz  # conservative for the long QwiicBus / ethernet differential run
+  scan: true
+
+spi:
+  clk_pin: GPIO36
+  mosi_pin: GPIO35
+
+# ---------------- Sensors ----------------
+sensor:
+  # SHT45 — the reference tent air temp/RH. Names give object_ids
+  # temperature/humidity so the AtomS3U rig can subscribe to
+  # grow/daniel-home/feather-air-monitor/sensor/{temperature,humidity}/state.
+  - platform: sht4x
+    address: 0x44
+    temperature:
+      name: "Temperature"
+      id: sht45_temperature
+      accuracy_decimals: 2
+    humidity:
+      name: "Humidity"
+      id: sht45_humidity
+      accuracy_decimals: 2
+    update_interval: 10s
+
+  # Air VPD — Tetens saturation-vapor-pressure form (temp + humidity only, kPa),
+  # the same formula the rig's scd4x_stats uses. Computed here for the screen and
+  # published as this node's own reading.
+  - platform: template
+    name: "Air VPD"
+    id: air_vpd
+    unit_of_measurement: "kPa"
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      float t = id(sht45_temperature).state;
+      float h = id(sht45_humidity).state;
+      if (isnan(t) || isnan(h)) return NAN;
+      float svp = 0.6108f * expf((17.27f * t) / (t + 237.3f));
+      return svp * (1.0f - h / 100.0f);
+
+  # Diagnostics
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    entity_category: diagnostic
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+
+# ---------------- TFT (built-in 240x135 IPS ST7789) ----------------
+color:
+  - { id: c_white, red: 100%, green: 100%, blue: 100% }
+  - { id: c_dim,   red: 60%,  green: 60%,  blue: 60% }
+  - { id: c_green, red: 20%,  green: 85%,  blue: 35% }
+  - { id: c_amber, red: 95%,  green: 70%,  blue: 10% }
+  - { id: c_red,   red: 90%,  green: 20%,  blue: 20% }
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_label
+    size: 18
+  - file: "gfonts://Roboto"
+    id: font_big
+    size: 40
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 22
+
+display:
+  - platform: st7789v
+    model: Custom
+    # Native panel is 135(w) x 240(h) with a display offset; rotate to landscape.
+    # Dial offset_width/offset_height in on real hardware until the readout fills
+    # the panel with no wraparound (commonly 52/40 for this 240x135 ST7789).
+    height: 240
+    width: 135
+    offset_width: 52
+    offset_height: 40
+    cs_pin: GPIO42
+    dc_pin: GPIO40
+    reset_pin: GPIO41
+    rotation: 270
+    update_interval: 1s
+    lambda: |-
+      it.fill(Color::BLACK);
+      float t = id(sht45_temperature).state;
+      float h = id(sht45_humidity).state;
+      float v = id(air_vpd).state;
+
+      // Top-left: TEMP
+      it.printf(6, 2, id(font_label), id(c_dim), "TEMP");
+      if (!isnan(t)) it.printf(6, 20, id(font_big), id(c_white), "%.1f°C", t);
+      else           it.printf(6, 20, id(font_big), id(c_dim), "--.-");
+
+      // Top-right: RH
+      it.printf(150, 2, id(font_label), id(c_dim), "RH");
+      if (!isnan(h)) it.printf(150, 20, id(font_big), id(c_white), "%.0f%%", h);
+      else           it.printf(150, 20, id(font_big), id(c_dim), "--");
+
+      // Bottom: Air VPD, color-coded by grow band (ok 0.6-1.2, warn outside, alert <0.4/>1.5)
+      it.printf(6, 78, id(font_label), id(c_dim), "AIR VPD");
+      auto vc = id(c_green);
+      if (!isnan(v)) {
+        if (v < 0.4f || v > 1.5f)      vc = id(c_red);
+        else if (v < 0.6f || v > 1.2f) vc = id(c_amber);
+      } else {
+        vc = id(c_dim);
+      }
+      if (!isnan(v)) it.printf(6, 96, id(font_big), vc, "%.2f", v);
+      else           it.printf(6, 96, id(font_big), vc, "--.--");
+      it.printf(150, 108, id(font_small), id(c_dim), "kPa");
+
+# ---------------- Controls ----------------
+button:
+  - platform: template
+    name: "Check Firmware Update"
+    entity_category: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+  - platform: restart
+    name: "Restart"

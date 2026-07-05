@@ -36,6 +36,16 @@ devices:
         url: https://github.com/dephekt/esphome-components.git
         ref: 012995f7a3d911e5fb18fa4a9115ff6575dedecc
         path: .
+  feather-air-monitor:
+    config: devices/feather-air-monitor.yaml
+    esphome_name: feather-air-monitor
+    node_id: feather-air-monitor
+    project_name: stackdrift.feather-air-monitor
+    package: feather-air-monitor
+    package_owner: stackdrift-firmware
+    chip_family: ESP32-S2
+    release: true
+    component_dependency: *stackdrift_esphome_components
   m5stack-airq:
     config: devices/m5stack-airq.yaml
     esphome_name: m5stack-airq
