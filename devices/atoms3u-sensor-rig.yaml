@@ -131,6 +131,7 @@ mqtt:
               { "component": "sensor", "objectId": "illuminance", "group": "overview", "role": "metric", "order": 50 },
               { "component": "sensor", "objectId": "barometric_pressure", "group": "overview", "role": "metric", "order": 60, "label": "Pressure" },
               { "component": "camera", "objectId": "thermal_camera", "group": "thermal_view", "role": "camera", "order": 10, "label": "Thermal Camera" },
+              { "component": "binary_sensor", "objectId": "air_sensor_offline", "group": "thresholds", "order": 5 },
               { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
               { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
               { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
@@ -435,6 +436,14 @@ scd4x_stats:
     id: vpd_sensor
     unit_of_measurement: "kPa"
     accuracy_decimals: 2
+    # Go unavailable in lockstep with the temp/RH inputs. scd4x_stats only
+    # publishes VPD while its inputs are valid, so without this the value would
+    # freeze on the last computed number during a feather outage — a stale
+    # "wrong value" while temp/RH already read unavailable.
+    filters:
+      - timeout:
+          timeout: 5min
+          value: !lambda 'return NAN;'
     web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 40 }
   daily_max_co2:
     name: "Daily Max CO2"
@@ -534,6 +543,18 @@ scd4x_alerts:
 # controls; scd4x_alerts DEPENDENCIES-requires binary_sensor). Mirrors the
 # known-good grow-monitor config.
 binary_sensor:
+  # Loud, explicit signal that the SHT45 feed is gone. scd4x_alerts guards its
+  # alerts only on has_state(), and a published NaN keeps has_state() true while
+  # every threshold comparison turns false — so an ACTIVE temp/RH alert silently
+  # clears to OFF when the feed drops (a false "all clear" during e.g. an
+  # overheat). This alarm surfaces the outage instead of letting it read as safe.
+  - platform: template
+    name: "Air Sensor Offline"
+    id: air_sensor_offline
+    device_class: problem
+    lambda: |-
+      return isnan(id(temperature_sensor).state) || isnan(id(humidity_sensor).state);
+    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 5 }
   - platform: template
     name: "Dummy Template Binary Sensor"
     id: dummy_template_binary_sensor
