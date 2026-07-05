@@ -70,6 +70,9 @@ logger:
   hardware_uart: USB_SERIAL_JTAG   # StampS3 has native USB only (no UART chip)
 
 api:
+  # MQTT is the transport and no HA client connects to the native API, so the
+  # default reboot_timeout (15 min) was rebooting the device every 15 min.
+  reboot_timeout: 0s
   encryption:
     key: !secret api_encryption_key
 
