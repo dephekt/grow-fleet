@@ -127,7 +127,7 @@ mqtt:
               { "component": "sensor", "objectId": "co2", "group": "overview", "role": "metric", "order": 10 },
               { "component": "sensor", "objectId": "temperature", "group": "overview", "role": "metric", "order": 20 },
               { "component": "sensor", "objectId": "humidity", "group": "overview", "role": "metric", "order": 30 },
-              { "component": "sensor", "objectId": "vpd", "group": "overview", "role": "metric", "order": 40 },
+              { "component": "sensor", "objectId": "vpd", "group": "overview", "role": "metric", "order": 40, "label": "Air VPD" },
               { "component": "sensor", "objectId": "illuminance", "group": "overview", "role": "metric", "order": 50 },
               { "component": "sensor", "objectId": "barometric_pressure", "group": "overview", "role": "metric", "order": 60, "label": "Pressure" },
               { "component": "camera", "objectId": "thermal_camera", "group": "thermal_view", "role": "camera", "order": 10, "label": "Thermal Camera" },
@@ -342,13 +342,52 @@ sensor:
       id: co2_sensor
       web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 10 }
     temperature:
-      name: "Temperature"
-      id: temperature_sensor
-      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 20 }
+      name: "SCD41 Temperature"
+      id: scd41_temperature
+      entity_category: diagnostic
+      web_server: { sorting_group_id: diagnostics, sorting_weight: 22 }
     humidity:
-      name: "Humidity"
-      id: humidity_sensor
-      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 30 }
+      name: "SCD41 Humidity"
+      id: scd41_humidity
+      entity_category: diagnostic
+      web_server: { sorting_group_id: diagnostics, sorting_weight: 24 }
+
+  # --- Canonical tent air temp/RH: SHT45 reference on feather-air-monitor ---
+  # The SHT45 lives on the ESP32-S2 Feather (outside the tent). We subscribe to
+  # its published temp/RH and republish them 1:1 under the canonical ids the rig
+  # already consumes (VPD via scd4x_stats, temp/RH/VPD alerts via scd4x_alerts,
+  # the dashboard overview metrics).
+  #
+  # NO fallback. If the feather feed goes stale for 5 min the reading goes
+  # unavailable (NaN) rather than silently substituting the self-heated SCD41 —
+  # a wrong value from an unlabelled source is worse than a gap. We either have a
+  # valid SHT45 measurement or none.
+  - platform: mqtt_subscribe
+    name: "Temperature"
+    id: temperature_sensor
+    topic: grow/daniel-home/feather-air-monitor/sensor/temperature/state
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - timeout:
+          timeout: 5min
+          value: !lambda 'return NAN;'
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 20 }
+  - platform: mqtt_subscribe
+    name: "Humidity"
+    id: humidity_sensor
+    topic: grow/daniel-home/feather-air-monitor/sensor/humidity/state
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 2
+    filters:
+      - timeout:
+          timeout: 5min
+          value: !lambda 'return NAN;'
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 30 }
 
   # Barometric pressure (QMP6988 / BPS unit) — vendored hardened qmp6988 component
   # (verified init + runtime self-heal + plausibility guard; replaces the stock one).
