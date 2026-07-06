@@ -57,11 +57,8 @@ logger:
   level: DEBUG            # DEBUG during bring-up to see the I²C scan + live values
   hardware_uart: USB_CDC  # ESP32-S2 native USB (no UART bridge)
 
-api:
-  # MQTT is the transport and no HA client connects to the native API, so the
-  # default reboot_timeout (15 min) was rebooting the device every 15 min.
-  reboot_timeout: 0s
-
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
+# (On atlas the api component's WiFi/encryption loop load was jittering shared I2C.)
 ota:
   - platform: esphome
   - platform: http_request
