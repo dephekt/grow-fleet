@@ -55,8 +55,7 @@ logger:
   # logger so it doesn't fight the power-meter UART.
   baud_rate: 0
 
-api:
-
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
 ota:
   - platform: esphome
   - platform: http_request
@@ -304,10 +303,6 @@ binary_sensor:
           - ON for at least 4s
         then:
           - button.press: factory_reset_button
-
-  - platform: status
-    name: "API Status"
-    entity_category: diagnostic
 
 # ─── Buttons ─────────────────────────────────────────────────────────────────
 button:

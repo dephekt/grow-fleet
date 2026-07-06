@@ -69,13 +69,8 @@ logger:
   level: DEBUG   # DEBUG during bring-up to see the I2C scan + live values
   hardware_uart: USB_SERIAL_JTAG   # StampS3 has native USB only (no UART chip)
 
-api:
-  # MQTT is the transport and no HA client connects to the native API, so the
-  # default reboot_timeout (15 min) was rebooting the device every 15 min.
-  reboot_timeout: 0s
-  encryption:
-    key: !secret api_encryption_key
-
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
+# (On atlas the api component's WiFi/encryption loop load was jittering shared I2C.)
 ota:
   - platform: esphome
   - platform: http_request
@@ -350,9 +345,6 @@ scd4x_alerts:
 # dummy internal template entities register those platforms so its codegen has
 # somewhere to attach (mirrors the known-good AtomS3U rig config).
 binary_sensor:
-  - platform: status
-    name: "API Connected"
-    web_server: { sorting_group_id: diagnostics, sorting_weight: 30 }
   - platform: template
     name: "Dummy Template Binary Sensor"
     id: dummy_template_binary_sensor

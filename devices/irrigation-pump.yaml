@@ -53,11 +53,7 @@ logger:
   # logger so it doesn't fight the power-meter UART.
   baud_rate: 0
 
-api:
-  # NOTE: API encryption adds ~7 KB of heap on ESP8266. Left unencrypted to
-  # match the rest of the fleet (no HA in the control path; MQTT is primary).
-  # If HA integration is needed later, add encryption key here.
-
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
 ota:
   - platform: esphome
   - platform: http_request
@@ -353,10 +349,6 @@ binary_sensor:
           - ON for at least 4s
         then:
           - button.press: factory_reset_button
-
-  - platform: status
-    name: "API Status"
-    entity_category: diagnostic
 
 # ─── Irrigation script ────────────────────────────────────────────────────────
 # mode: restart — if fired while already running, the current delay is
