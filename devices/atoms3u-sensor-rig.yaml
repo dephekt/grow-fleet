@@ -341,11 +341,6 @@ sensor:
   # simplest for the bench (switch to measurement_mode: single_shot later).
   - platform: scd4x
     id: co2_component
-    # Feed the on-board CO2 pressure compensation from the QMP6988 (BPS unit).
-    # The SCD4x reads NDIR CO2, which drifts with ambient pressure; the sensor
-    # applies a live correction when handed a pressure source (hPa, matching the
-    # qmp6988 output). Updates whenever pressure_sensor publishes (60s interval).
-    ambient_pressure_compensation_source: pressure_sensor
     co2:
       name: "CO2"
       id: co2_sensor
