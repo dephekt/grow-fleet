@@ -120,6 +120,37 @@ mqtt:
             "installedVersion": "${firmware_version}",
             "manifestUrl": "${grow_app_base_url}/api/firmware/devices/m5stack-airq/manifest"
           }
+    - mqtt.publish:
+        topic: grow/daniel-home/m5stack-airq/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "m5stack-airq",
+            "groups": [
+              { "id": "overview", "title": "Air Quality", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "particulates", "title": "Particulates", "order": 20, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "thresholds", "title": "CO2 Thresholds & Alerts", "order": 30, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor", "objectId": "co2", "group": "overview", "role": "metric", "order": 10 },
+              { "component": "sensor", "objectId": "pm__2_5um", "group": "overview", "role": "metric", "order": 20, "label": "PM2.5" },
+              { "component": "sensor", "objectId": "voc_index", "group": "overview", "role": "metric", "order": 30 },
+              { "component": "sensor", "objectId": "nox_index", "group": "overview", "role": "metric", "order": 40 },
+              { "component": "sensor", "objectId": "co2_moving_average", "group": "overview", "role": "metric", "order": 50 },
+              { "component": "sensor", "objectId": "daily_max_co2", "group": "overview", "role": "metric", "order": 60 },
+              { "component": "sensor", "objectId": "pm__1um", "group": "particulates", "role": "metric", "order": 10, "label": "PM1.0" },
+              { "component": "sensor", "objectId": "pm__4um", "group": "particulates", "role": "metric", "order": 20, "label": "PM4.0" },
+              { "component": "sensor", "objectId": "pm__10um", "group": "particulates", "role": "metric", "order": 30, "label": "PM10" },
+              { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
+              { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
+              { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
+              { "component": "binary_sensor", "objectId": "co2_low_alert", "group": "thresholds", "order": 40 },
+              { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
+            ]
+          }
 
 i2c:
   id: bus_a
