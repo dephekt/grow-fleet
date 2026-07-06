@@ -32,12 +32,9 @@ update:
     name: "Firmware Update"
     source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
 
-api:
-  # MQTT is the transport and no HA client connects to the native API, so the
-  # default reboot_timeout (15 min) was rebooting the device every 15 min.
-  reboot_timeout: 0s
-  encryption:
-    key: !secret api_encryption_key
+# Native Home Assistant API removed: HA is no longer used and MQTT is the sole
+# transport. Dropping it also rules the api component out as a factor in the EC
+# circuit wedge (test). OTA still works via the ota: block below, independent of api.
 
 external_components:
   - source:
@@ -212,13 +209,6 @@ status_led:
   pin:
     number: GPIO13
     inverted: false
-
-binary_sensor:
-  - platform: status
-    name: "Home Assistant API Status"
-    entity_category: diagnostic
-    web_server:
-      sorting_group_id: diagnostic
 
 text_sensor:
   - platform: version
