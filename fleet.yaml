@@ -54,5 +54,5 @@ devices:
     package: m5stack-airq
     package_owner: stackdrift-firmware
     chip_family: ESP32-S3
-    release: false
+    release: true
     component_dependency: *stackdrift_esphome_components
