@@ -43,7 +43,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 798fa7268b5940f1dcfef3ff05e601e5b004fe81
+      ref: 8892ebab4ffdb77d5941074891104a09ca978f40
       path: .
     components: ["ezo_types"]
 
@@ -375,6 +375,18 @@ sensor:
       name: "EC Queue Size"
       web_server:
         sorting_group_id: ec_circuit
+    # Self-heal observability: health_state reads OK / STALLED / RECOVERING /
+    # SETTLING / SUSPENDED / OFF; recovery_count is the lifetime auto power-cycle
+    # tally. A climbing recovery_count is the signal the hardware fix (I2C
+    # isolation / EZO Vdd bleed) is warranted.
+    health_state:
+      name: "EC Health"
+      web_server:
+        sorting_group_id: ec_circuit
+    recovery_count:
+      name: "EC Recovery Count"
+      web_server:
+        sorting_group_id: ec_circuit
     tds:
       name: "Water TDS"
       web_server:
@@ -654,7 +666,10 @@ switch:
     id: ph_enable
     web_server:
       sorting_group_id: ph_circuit
-    restore_mode: RESTORE_DEFAULT_ON
+    # ALWAYS_ON (not RESTORE_DEFAULT_ON): the ezo_types stall watchdog toggles this
+    # pin to auto power-cycle a wedged circuit. RESTORE_* modes persist to NVS on
+    # every toggle; ALWAYS_ON forces the desired boot state with no flash writes.
+    restore_mode: ALWAYS_ON
 
   - platform: gpio
     pin:
@@ -664,7 +679,10 @@ switch:
     id: ec_enable
     web_server:
       sorting_group_id: ec_circuit
-    restore_mode: RESTORE_DEFAULT_ON
+    # ALWAYS_ON (not RESTORE_DEFAULT_ON): the ezo_types stall watchdog toggles this
+    # pin to auto power-cycle a wedged circuit. RESTORE_* modes persist to NVS on
+    # every toggle; ALWAYS_ON forces the desired boot state with no flash writes.
+    restore_mode: ALWAYS_ON
 
   # Slot 4 = AUX (general-purpose port); currently hosts the ORP circuit.
   - platform: gpio
@@ -675,7 +693,10 @@ switch:
     id: aux_enable
     web_server:
       sorting_group_id: orp_circuit
-    restore_mode: RESTORE_DEFAULT_ON
+    # ALWAYS_ON (not RESTORE_DEFAULT_ON): the ezo_types stall watchdog toggles this
+    # pin to auto power-cycle a wedged circuit. RESTORE_* modes persist to NVS on
+    # every toggle; ALWAYS_ON forces the desired boot state with no flash writes.
+    restore_mode: ALWAYS_ON
 
   - platform: gpio
     pin:
@@ -685,7 +706,10 @@ switch:
     id: rtd_enable
     web_server:
       sorting_group_id: rtd_circuit
-    restore_mode: RESTORE_DEFAULT_ON
+    # ALWAYS_ON (not RESTORE_DEFAULT_ON): the ezo_types stall watchdog toggles this
+    # pin to auto power-cycle a wedged circuit. RESTORE_* modes persist to NVS on
+    # every toggle; ALWAYS_ON forces the desired boot state with no flash writes.
+    restore_mode: ALWAYS_ON
 
   # === Temperature Compensation Control ===
   - platform: template
