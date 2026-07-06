@@ -129,25 +129,34 @@ mqtt:
             "schema": "grow-ui.v1",
             "nodeId": "m5stack-airq",
             "groups": [
-              { "id": "overview", "title": "Air Quality", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
-              { "id": "particulates", "title": "Particulates", "order": 20, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "scd40", "title": "SCD40 (CO2 / RHT)", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "sen55", "title": "SEN55 (PM / VOC / NOx / RHT)", "order": 20, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
               { "id": "thresholds", "title": "CO2 Thresholds & Alerts", "order": 30, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
+              { "id": "calibration", "title": "SCD40 Calibration", "order": 40, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
               { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false }
             ],
             "entities": [
-              { "component": "sensor", "objectId": "co2", "group": "overview", "role": "metric", "order": 10 },
-              { "component": "sensor", "objectId": "pm__2_5um", "group": "overview", "role": "metric", "order": 20, "label": "PM2.5" },
-              { "component": "sensor", "objectId": "voc_index", "group": "overview", "role": "metric", "order": 30 },
-              { "component": "sensor", "objectId": "nox_index", "group": "overview", "role": "metric", "order": 40 },
-              { "component": "sensor", "objectId": "co2_moving_average", "group": "overview", "role": "metric", "order": 50 },
-              { "component": "sensor", "objectId": "daily_max_co2", "group": "overview", "role": "metric", "order": 60 },
-              { "component": "sensor", "objectId": "pm__1um", "group": "particulates", "role": "metric", "order": 10, "label": "PM1.0" },
-              { "component": "sensor", "objectId": "pm__4um", "group": "particulates", "role": "metric", "order": 20, "label": "PM4.0" },
-              { "component": "sensor", "objectId": "pm__10um", "group": "particulates", "role": "metric", "order": 30, "label": "PM10" },
+              { "component": "sensor", "objectId": "co2", "group": "scd40", "role": "metric", "order": 10 },
+              { "component": "sensor", "objectId": "co2_moving_average", "group": "scd40", "role": "metric", "order": 20, "label": "CO2 Moving Avg" },
+              { "component": "sensor", "objectId": "daily_max_co2", "group": "scd40", "role": "metric", "order": 30, "label": "CO2 Daily Max" },
+              { "component": "sensor", "objectId": "scd40_temperature", "group": "scd40", "role": "metric", "order": 40, "label": "SCD40 Temp" },
+              { "component": "sensor", "objectId": "scd40_humidity", "group": "scd40", "role": "metric", "order": 50, "label": "SCD40 RH" },
+              { "component": "sensor", "objectId": "pm__1um", "group": "sen55", "role": "metric", "order": 60, "label": "PM1.0" },
+              { "component": "sensor", "objectId": "pm__2_5um", "group": "sen55", "role": "metric", "order": 70, "label": "PM2.5" },
+              { "component": "sensor", "objectId": "pm__4um", "group": "sen55", "role": "metric", "order": 80, "label": "PM4.0" },
+              { "component": "sensor", "objectId": "pm__10um", "group": "sen55", "role": "metric", "order": 90, "label": "PM10" },
+              { "component": "sensor", "objectId": "sen55_temperature", "group": "sen55", "role": "metric", "order": 100, "label": "SEN55 Temp" },
+              { "component": "sensor", "objectId": "sen55_humidity", "group": "sen55", "role": "metric", "order": 110, "label": "SEN55 RH" },
+              { "component": "sensor", "objectId": "voc_index", "group": "sen55", "role": "metric", "order": 120 },
+              { "component": "sensor", "objectId": "nox_index", "group": "sen55", "role": "metric", "order": 130 },
               { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
               { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
               { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
               { "component": "binary_sensor", "objectId": "co2_low_alert", "group": "thresholds", "order": 40 },
+              { "component": "number", "objectId": "scd40_temperature_offset", "group": "calibration", "order": 10 },
+              { "component": "switch", "objectId": "scd40_auto_self_calibration", "group": "calibration", "order": 20 },
+              { "component": "number", "objectId": "co2_forced_calibration_target", "group": "calibration", "order": 30 },
+              { "component": "button", "objectId": "perform_co2_forced_calibration", "group": "calibration", "order": 40 },
               { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
             ]
           }
@@ -183,6 +192,9 @@ web_server:
     - id: alerts
       name: "CO2 Alerts"
       sorting_weight: 30
+    - id: calibration
+      name: "SCD40 Calibration"
+      sorting_weight: 35
     - id: diagnostics
       name: "Diagnostics"
       sorting_weight: 40
@@ -265,29 +277,33 @@ display:
 
 # ---------------- Sensors ----------------
 sensor:
-  # CO2 (SCD40). temp/RH are read but kept internal — they only exist to satisfy
-  # scd4x_stats/scd4x_alerts refs; they are NOT trustworthy on this self-heated
-  # board, so they are not surfaced.
+  # CO2 + temp/RH (SCD40). The onboard temp/RH self-heat badly on this board
+  # (raw ran ~15.6°C hot, validated 2026-05-31). They are now surfaced RAW
+  # (temperature_offset: 0) on purpose, to illustrate the self-heating vs the
+  # feather-air-monitor's SHT45 reference. ASC is disabled; ambient-pressure
+  # compensation is fed from the atoms3u BPS by the mqtt_subscribe relay below.
   - platform: scd4x
     id: co2_component
     address: 0x62
     i2c_id: bus_a
     update_interval: ${sensor_interval}
-    # 15.6°C self-heat offset (validated 2026-05-31). Does not affect CO2; kept
-    # only so the hidden temp/RH are roughly sane.
-    temperature_offset: 15.6°C
+    automatic_self_calibration: false
+    # No compensation — expose the raw self-heat. Runtime-adjust via the "SCD40
+    # Temperature Offset" number (applies on restart; ESPHome writes the offset
+    # only at setup, so a change needs a reboot and the config default is 0°C).
+    temperature_offset: 0°C
     co2:
       name: "CO2"
       id: co2_sensor
       web_server: { sorting_group_id: co2, sorting_weight: 10 }
     temperature:
-      name: "SCD40 Temperature (internal)"
+      name: "SCD40 Temperature"
       id: temperature_sensor
-      internal: true
+      web_server: { sorting_group_id: co2, sorting_weight: 40 }
     humidity:
-      name: "SCD40 Humidity (internal)"
+      name: "SCD40 Humidity"
       id: humidity_sensor
-      internal: true
+      web_server: { sorting_group_id: co2, sorting_weight: 50 }
 
   # Particulates + VOC/NOx (SEN55). Full mode (PM sensors configured -> fan +
   # laser on). SEN55's own temp/RH are intentionally omitted.
@@ -320,6 +336,48 @@ sensor:
       name: "NOx Index"
       id: nox_sensor
       web_server: { sorting_group_id: particulates, sorting_weight: 60 }
+    # SEN55 onboard RHT — surfaced RAW (no temperature_compensation), same board
+    # self-heat as the SCD40; kept for comparison against the SHT45 reference.
+    temperature:
+      name: "SEN55 Temperature"
+      id: sen55_temperature
+      web_server: { sorting_group_id: particulates, sorting_weight: 70 }
+    humidity:
+      name: "SEN55 Humidity"
+      id: sen55_humidity
+      web_server: { sorting_group_id: particulates, sorting_weight: 80 }
+
+  # Ambient-pressure compensation for the SCD40 CO2, sourced from the
+  # atoms3u-sensor-rig's QMP6988 (BPS) over the shared MQTT broker. NDIR CO2
+  # drifts with barometric pressure; the SCD4x default assumes a fixed 1013 hPa.
+  # We feed live station pressure but DECOUPLED from the SCD40 read cycle: unlike
+  # ambient_pressure_compensation_source (which writes 0xE000 inside the SCD4x
+  # update() right before the read — implicated in stalling the atoms3u SCD41,
+  # grow-fleet 91fc3f5), this writes on the MQTT callback and only when the
+  # integer hPa changes.
+  - platform: mqtt_subscribe
+    name: "Ambient Pressure (atoms3u BPS)"
+    id: ambient_pressure_ext
+    internal: true          # relay only; keeps this node's UI air-quality-only
+    topic: grow/daniel-home/atoms3u-sensor-rig/sensor/barometric_pressure/state
+    qos: 0
+    unit_of_measurement: "hPa"
+    device_class: pressure
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      # If the atoms3u feed stops (offline / sensor drop), go NaN after 5 min so
+      # we never push a stale pressure; the SCD40 keeps its last-good value.
+      - timeout:
+          timeout: 5min
+          value: !lambda 'return NAN;'
+    on_value:
+      then:
+        - lambda: |-
+            const float p = x;  // hPa == mBar; the SCD4x setter wants hPa, no conversion
+            if (!std::isnan(p) && p >= 700.0f && p <= 1200.0f) {
+              id(co2_component).set_ambient_pressure_compensation(p);
+            }
 
   # Diagnostics
   - platform: uptime
@@ -391,6 +449,57 @@ number:
     optimistic: true
     internal: true
 
+  # SCD40 temperature offset (°C subtracted to compensate self-heating).
+  # ESPHome writes this to the sensor only at setup(), so a change takes effect
+  # after a Restart; the config default is 0°C (raw).
+  - platform: template
+    name: "SCD40 Temperature Offset"
+    id: scd40_temp_offset
+    entity_category: config
+    unit_of_measurement: "°C"
+    min_value: 0
+    max_value: 20
+    step: 0.1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    mode: box
+    web_server: { sorting_group_id: calibration, sorting_weight: 10 }
+    set_action:
+      - lambda: 'id(co2_component).set_temperature_offset(x);'
+
+  # Target reference CO2 (ppm) for a forced recalibration — used by the
+  # "Perform CO2 Forced Calibration" button. 420 ≈ clean outdoor air.
+  - platform: template
+    name: "CO2 Forced Calibration Target"
+    id: co2_frc_target
+    entity_category: config
+    unit_of_measurement: "ppm"
+    min_value: 400
+    max_value: 2000
+    step: 5
+    initial_value: 420
+    restore_value: true
+    optimistic: true
+    mode: box
+    web_server: { sorting_group_id: calibration, sorting_weight: 30 }
+
+switch:
+  # Automatic self-calibration. Config default is OFF (set on the scd4x block);
+  # ESPHome writes ASC to the sensor only at setup(), so toggling here takes
+  # effect after a Restart.
+  - platform: template
+    name: "SCD40 Auto Self Calibration"
+    id: scd40_asc
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    web_server: { sorting_group_id: calibration, sorting_weight: 20 }
+    turn_on_action:
+      - lambda: 'id(co2_component).set_automatic_self_calibration(true);'
+    turn_off_action:
+      - lambda: 'id(co2_component).set_automatic_self_calibration(false);'
+
 button:
   - platform: template
     name: "Check Firmware Update"
@@ -402,6 +511,17 @@ button:
   - platform: restart
     name: "Restart"
     web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }
+
+  # Forced recalibration: assert the SCD40 is in air of the target ppm (set via
+  # "CO2 Forced Calibration Target") and press. Runs live (stop -> FRC -> restart).
+  - platform: template
+    name: "Perform CO2 Forced Calibration"
+    entity_category: config
+    web_server: { sorting_group_id: calibration, sorting_weight: 40 }
+    on_press:
+      - scd4x.perform_forced_calibration:
+          id: co2_component
+          value: !lambda 'return (uint16_t) id(co2_frc_target).state;'
 
 text_sensor:
   - platform: wifi_info

@@ -120,6 +120,7 @@ mqtt:
               { "id": "thermal_view", "title": "Thermal Camera", "order": 15, "variant": "camera", "surface": "dashboard", "defaultOpen": true },
               { "id": "thresholds", "title": "Thresholds & Alerts", "order": 20, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
               { "id": "thermal", "title": "Thermal Camera", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "calibration", "title": "SCD41 Calibration", "order": 40, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
               { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
               { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
             ],
@@ -166,6 +167,10 @@ mqtt:
               { "component": "number", "objectId": "roi_center_column", "group": "thermal_view", "role": "quick-control", "order": 60 },
               { "component": "number", "objectId": "roi_size", "group": "thermal_view", "role": "quick-control", "order": 70 },
               { "component": "number", "objectId": "thermal_update_interval", "group": "thermal", "order": 70 },
+              { "component": "number", "objectId": "scd41_temperature_offset", "group": "calibration", "order": 10 },
+              { "component": "switch", "objectId": "scd41_auto_self_calibration", "group": "calibration", "order": 20 },
+              { "component": "number", "objectId": "co2_forced_calibration_target", "group": "calibration", "order": 30 },
+              { "component": "button", "objectId": "perform_co2_forced_calibration", "group": "calibration", "order": 40 },
               { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
             ]
           }
@@ -215,6 +220,9 @@ web_server:
     - id: environmental_alerts
       name: "Environmental Alerts"
       sorting_weight: 30
+    - id: calibration
+      name: "SCD41 Calibration"
+      sorting_weight: 35
     - id: diagnostics
       name: "Diagnostics"
       sorting_weight: 40
@@ -338,6 +346,10 @@ sensor:
   # simplest for the bench (switch to measurement_mode: single_shot later).
   - platform: scd4x
     id: co2_component
+    # ASC off (matches the airq); toggle via the "SCD41 Auto Self-Calibration"
+    # switch below (applies on restart). Runtime offset via "SCD41 Temperature
+    # Offset". Ambient-pressure compensation is fed from the local QMP6988 below.
+    automatic_self_calibration: false
     co2:
       name: "CO2"
       id: co2_sensor
@@ -405,6 +417,20 @@ sensor:
       name: "Barometric Pressure"
       id: pressure_sensor
       web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 50 }
+      # Feed live station pressure to the SCD41 CO2 compensation, DECOUPLED from
+      # the SCD41 read cycle (unlike the native ambient_pressure_compensation_source
+      # that was reverted in 91fc3f5 for stalling CO2). set_ambient_pressure_
+      # compensation de-dupes on integer-hPa change, so this writes only a few
+      # times/hour. NOTE: SCD41 + MLX90640 + QMP6988 share one 400kHz bus — the
+      # prior stall suspect; enabled deliberately (no watchdog) to observe whether
+      # it recurs. Each write logs "Setting ambient pressure compensation to N hPa".
+      on_value:
+        then:
+          - lambda: |-
+              const float p = x;  // hPa == mBar; the SCD4x setter wants hPa, no conversion
+              if (!std::isnan(p) && p >= 700.0f && p <= 1200.0f) {
+                id(co2_component).set_ambient_pressure_compensation(p);
+              }
 
   # Ambient light (DLight unit / BH1750FVI) — stock ESPHome component.
   - platform: bh1750
@@ -568,6 +594,40 @@ number:
     step: 1
     optimistic: true
     internal: true
+
+  # SCD41 temperature offset (°C). Only affects the diagnostic SCD41 temp/RH here
+  # (canonical temp/RH/VPD come from the SHT45 relay). ESPHome writes it at setup()
+  # only, so a change applies on Restart; config default 0°C.
+  - platform: template
+    name: "SCD41 Temperature Offset"
+    id: scd41_temp_offset
+    entity_category: config
+    unit_of_measurement: "°C"
+    min_value: 0
+    max_value: 20
+    step: 0.1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    mode: box
+    web_server: { sorting_group_id: calibration, sorting_weight: 10 }
+    set_action:
+      - lambda: 'id(co2_component).set_temperature_offset(x);'
+
+  # Target reference CO2 (ppm) for the forced recalibration button. 420 ≈ clean air.
+  - platform: template
+    name: "CO2 Forced Calibration Target"
+    id: co2_frc_target
+    entity_category: config
+    unit_of_measurement: "ppm"
+    min_value: 400
+    max_value: 2000
+    step: 5
+    initial_value: 420
+    restore_value: true
+    optimistic: true
+    mode: box
+    web_server: { sorting_group_id: calibration, sorting_weight: 30 }
 select:
   - platform: template
     name: "Dummy Template Select"
@@ -582,6 +642,20 @@ switch:
     optimistic: true
     internal: true
 
+  # SCD41 automatic self-calibration. Config default OFF (on the scd4x block);
+  # ESPHome writes ASC at setup() only, so toggling here applies on Restart.
+  - platform: template
+    name: "SCD41 Auto Self Calibration"
+    id: scd41_asc
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    web_server: { sorting_group_id: calibration, sorting_weight: 20 }
+    turn_on_action:
+      - lambda: 'id(co2_component).set_automatic_self_calibration(true);'
+    turn_off_action:
+      - lambda: 'id(co2_component).set_automatic_self_calibration(false);'
+
 button:
   - platform: template
     name: "Check Firmware Update"
@@ -593,6 +667,17 @@ button:
   - platform: restart
     name: "Restart"
     web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }
+
+  # Forced recalibration: assert the SCD41 is in air of the target ppm (set via
+  # "CO2 Forced Calibration Target") and press. Runs live (stop -> FRC -> restart).
+  - platform: template
+    name: "Perform CO2 Forced Calibration"
+    entity_category: config
+    web_server: { sorting_group_id: calibration, sorting_weight: 40 }
+    on_press:
+      - scd4x.perform_forced_calibration:
+          id: co2_component
+          value: !lambda 'return (uint16_t) id(co2_frc_target).state;'
 
 text_sensor:
   - platform: wifi_info
