@@ -252,6 +252,14 @@ sensor:
     address: 99
     update_interval: 5s
     accuracy_decimals: 3
+    # median-only: publishes a real, un-blended 0.001-resolution reading every
+    # ~35s (7 samples), rejecting the single-sample spikes. The probe's ±0.002
+    # accuracy earns all three decimals, so we don't average them away.
+    filters:
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 3
     power_control_switch: ph_enable
     rtd_sensor: rtd_sensor
     temp_compensation_switch: ph_temp_comp_enable
@@ -318,6 +326,18 @@ sensor:
     name: "Water EC"
     address: 100
     update_interval: 5s
+    accuracy_decimals: 0
+    # ±2% accuracy (~±30 µS/cm) means sub-integer digits are pure noise, so we
+    # round to whole µS/cm and can average freely: median rejects spikes, EMA
+    # smooths the trend line.
+    filters:
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 3
+      - exponential_moving_average:
+          alpha: 0.3
+          send_every: 1
     power_control_switch: ec_enable
     rtd_sensor: rtd_sensor
     temp_compensation_switch: ec_temp_comp_enable
@@ -391,7 +411,22 @@ sensor:
     id: rtd_sensor
     name: "Water Temperature"
     address: 102
-    update_interval: 5s
+    # 10s (not 5s): the Class B RTD responds 90% in 8s, so polling faster than
+    # that yields no genuinely-new settled reading — it just adds I2C traffic.
+    update_interval: 10s
+    accuracy_decimals: 1
+    # ±(0.3 + 0.005·t) ≈ ±0.42°C at room temp, so tenths is the finest
+    # meaningful digit. This RTD is also the temp-compensation source for the pH
+    # and EC circuits, so a clean value here tightens those readings too.
+    # median (6 × 10s = 60s, well past the 8s response) + EMA for a stable line.
+    filters:
+      - median:
+          window_size: 6
+          send_every: 6
+          send_first_at: 3
+      - exponential_moving_average:
+          alpha: 0.3
+          send_every: 1
     power_control_switch: rtd_enable
     web_server:
       sorting_group_id: overview
@@ -435,6 +470,14 @@ sensor:
     name: "Water ORP"
     address: 98
     update_interval: 5s
+    accuracy_decimals: 0
+    # ±1mV accuracy → 1mV is the meaningful resolution, so 0 decimals. Like pH,
+    # median-only preserves each real reading while dropping spikes (~35s).
+    filters:
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 3
     power_control_switch: aux_enable
     web_server:
       sorting_group_id: overview
