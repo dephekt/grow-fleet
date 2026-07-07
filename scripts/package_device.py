@@ -10,11 +10,11 @@ from pathlib import Path
 from fleetlib import (
     assert_flashable_secrets,
     capture,
+    device_component_dependency,
     device_spec,
     esphome_version,
     firmware_artifacts,
     firmware_channel,
-    fleet_component_dependency,
     md5_file,
     sha256_file,
     stable_version_key,
@@ -164,7 +164,7 @@ def package_device(
         "source_sha": source_sha,
         "chip_family": spec.chip_family,
         "generated_at": generated_timestamp(),
-        "component_dependency": fleet_component_dependency(),
+        "component_dependency": device_component_dependency(spec),
         "esphome_version": esphome_version(),
         "artifact_filenames": artifact_filenames,
         "md5": {
