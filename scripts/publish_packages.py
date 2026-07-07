@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -17,6 +18,7 @@ PRIVATE_PACKAGE_USER = "stackdrift-firmware"
 DEFAULT_OCI_REGISTRY = "ghcr.io"
 DEFAULT_OCI_OWNER = "dephekt"
 DEFAULT_OCI_PACKAGE_PREFIX = "grow-fleet"
+GITHUB_API_BASE = "https://api.github.com"
 DEFAULT_OCI_SOURCE_URL = ""
 OCI_SOURCE_ANNOTATION = "org.opencontainers.image.source"
 OCI_ARTIFACT_TYPE = "application/vnd.stackdrift.grow-firmware.v1"
@@ -279,14 +281,107 @@ def list_oci_tags(registry: str, owner: str, package_prefix: str, package: str) 
     return [line.strip() for line in completed.stdout.splitlines() if line.strip() and not line.startswith("Tags for ")]
 
 
-def prune_edge_oci_packages(registry: str, owner: str, package_prefix: str, package: str, keep: int) -> list[str]:
-    candidates = edge_cleanup_candidates(list_oci_tags(registry, owner, package_prefix, package), keep)
-    for version in candidates:
-        subprocess.run(
-            ["oras", "manifest", "delete", "--force", oci_ref(registry, owner, package_prefix, package, version)],
-            check=True,
+def github_packages_token() -> str | None:
+    return os.environ.get("GHCR_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
+
+def _github_api_request(url: str, token: str, method: str = "GET") -> Request:
+    return Request(
+        url,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+
+
+def list_ghcr_package_versions(owner: str, package_name: str, token: str) -> list[dict[str, object]]:
+    """List container package versions for a user-owned GHCR package.
+
+    GHCR does not implement the OCI registry manifest-delete endpoint, so
+    pruning must go through the GitHub Packages REST API instead of oras.
+    """
+    versions: list[dict[str, object]] = []
+    page = 1
+    while True:
+        url = (
+            f"{GITHUB_API_BASE}/users/{quote(owner, safe='')}"
+            f"/packages/container/{quote(package_name, safe='')}/versions"
+            f"?per_page=100&page={page}"
         )
-    return candidates
+        with urlopen(_github_api_request(url, token)) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, list) or not payload:
+            break
+        versions.extend(item for item in payload if isinstance(item, dict))
+        if len(payload) < 100:
+            break
+        page += 1
+    return versions
+
+
+def delete_ghcr_package_version(owner: str, package_name: str, version_id: object, token: str) -> None:
+    url = (
+        f"{GITHUB_API_BASE}/users/{quote(owner, safe='')}"
+        f"/packages/container/{quote(package_name, safe='')}/versions/{quote(str(version_id), safe='')}"
+    )
+    with urlopen(_github_api_request(url, token, method="DELETE")) as response:
+        response.read()
+
+
+def _version_ids_by_tag(versions: list[dict[str, object]]) -> dict[str, object]:
+    mapping: dict[str, object] = {}
+    for version in versions:
+        metadata = version.get("metadata")
+        container = metadata.get("container") if isinstance(metadata, dict) else None
+        tags = container.get("tags") if isinstance(container, dict) else None
+        if not isinstance(tags, list):
+            continue
+        for tag in tags:
+            if isinstance(tag, str):
+                mapping[tag] = version.get("id")
+    return mapping
+
+
+def prune_edge_oci_packages(registry: str, owner: str, package_prefix: str, package: str, keep: int) -> list[str]:
+    """Delete the oldest edge tags beyond ``keep`` via the GitHub Packages API.
+
+    Best-effort: any failure (missing token, insufficient scope, transient API
+    error) is reported as a warning and never aborts publishing. The prior
+    ``oras manifest delete`` approach always failed on GHCR with
+    "unsupported: The operation is unsupported".
+    """
+    candidates = edge_cleanup_candidates(list_oci_tags(registry, owner, package_prefix, package), keep)
+    if not candidates:
+        return []
+
+    token = github_packages_token()
+    if not token:
+        print(f"::warning::skipping edge prune for {package}: set GHCR_TOKEN (delete:packages) to enable pruning", flush=True)
+        return []
+
+    package_name = oci_package_name(package_prefix, package)
+    try:
+        version_ids = _version_ids_by_tag(list_ghcr_package_versions(owner, package_name, token))
+    except (HTTPError, URLError) as exc:
+        print(f"::warning::skipping edge prune for {package}: cannot list package versions: {exc}", flush=True)
+        return []
+
+    removed: list[str] = []
+    for version in candidates:
+        version_id = version_ids.get(version)
+        if version_id is None:
+            print(f"::warning::edge prune: no package version found for {package} {version}", flush=True)
+            continue
+        try:
+            delete_ghcr_package_version(owner, package_name, version_id, token)
+        except (HTTPError, URLError) as exc:
+            print(f"::warning::edge prune: failed to delete {package} {version}: {exc}", flush=True)
+            continue
+        removed.append(version)
+    return removed
 
 
 def main() -> None:
