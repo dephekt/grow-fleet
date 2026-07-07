@@ -40,7 +40,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 8892ebab4ffdb77d5941074891104a09ca978f40
+      ref: 60fe507cb1f8e05078ab098db42f77b0d57fba85
       path: .
     components: ["ezo_types"]
 
@@ -250,16 +250,19 @@ sensor:
     id: ph_sensor
     name: "Water pH"
     address: 99
-    update_interval: 5s
+    # 15s (was 5s): four EZO circuits share this bus and each poll costs a
+    # command + response while a sibling may be mid-measurement. Slower polling
+    # keeps the bus quiet around the EC circuit's 600ms read window.
+    update_interval: 15s
     accuracy_decimals: 3
     # median-only: publishes a real, un-blended 0.001-resolution reading every
-    # ~35s (7 samples), rejecting the single-sample spikes. The probe's ±0.002
+    # ~45s (3 samples), rejecting the single-sample spikes. The probe's ±0.002
     # accuracy earns all three decimals, so we don't average them away.
     filters:
       - median:
-          window_size: 7
-          send_every: 7
-          send_first_at: 3
+          window_size: 3
+          send_every: 3
+          send_first_at: 2
     power_control_switch: ph_enable
     rtd_sensor: rtd_sensor
     temp_compensation_switch: ph_temp_comp_enable
@@ -325,16 +328,18 @@ sensor:
     id: ec_sensor
     name: "Water EC"
     address: 100
-    update_interval: 5s
+    # 15s (was 5s): see the pH note — less bus traffic around the EC circuit's
+    # 600ms measurement window, which is when it has historically firmware-locked.
+    update_interval: 15s
     accuracy_decimals: 0
     # ±2% accuracy (~±30 µS/cm) means sub-integer digits are pure noise, so we
     # round to whole µS/cm and can average freely: median rejects spikes, EMA
     # smooths the trend line.
     filters:
       - median:
-          window_size: 7
-          send_every: 7
-          send_first_at: 3
+          window_size: 3
+          send_every: 3
+          send_first_at: 2
       - exponential_moving_average:
           alpha: 0.3
           send_every: 1
@@ -383,18 +388,6 @@ sensor:
         sorting_group_id: ec_circuit
     queue_size:
       name: "EC Queue Size"
-      web_server:
-        sorting_group_id: ec_circuit
-    # Self-heal observability: health_state reads OK / STALLED / RECOVERING /
-    # SETTLING / SUSPENDED / OFF; recovery_count is the lifetime auto power-cycle
-    # tally. A climbing recovery_count is the signal the hardware fix (I2C
-    # isolation / EZO Vdd bleed) is warranted.
-    health_state:
-      name: "EC Health"
-      web_server:
-        sorting_group_id: ec_circuit
-    recovery_count:
-      name: "EC Recovery Count"
       web_server:
         sorting_group_id: ec_circuit
     tds:
@@ -469,15 +462,16 @@ sensor:
     id: orp_sensor
     name: "Water ORP"
     address: 98
-    update_interval: 5s
+    # 15s (was 5s): see the pH note — keep the shared bus quiet.
+    update_interval: 15s
     accuracy_decimals: 0
     # ±1mV accuracy → 1mV is the meaningful resolution, so 0 decimals. Like pH,
-    # median-only preserves each real reading while dropping spikes (~35s).
+    # median-only preserves each real reading while dropping spikes (~45s).
     filters:
       - median:
-          window_size: 7
-          send_every: 7
-          send_first_at: 3
+          window_size: 3
+          send_every: 3
+          send_first_at: 2
     power_control_switch: aux_enable
     web_server:
       sorting_group_id: overview
