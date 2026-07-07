@@ -62,6 +62,44 @@ def fleet_component_dependency() -> dict[str, Any]:
     return component_dependency
 
 
+def _load_device_config(config_path: Path) -> dict[str, Any]:
+    """Parse a device ESPHome YAML, tolerating ESPHome-only tags (``!secret``,
+    ``!lambda``, ...) that plain ``yaml.safe_load`` would reject.
+
+    We only need the static structure (``external_components``), which never
+    uses custom tags, so unknown ``!``-tags are collapsed to ``None``.
+    """
+
+    class _DeviceLoader(yaml.SafeLoader):
+        pass
+
+    _DeviceLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+    with config_path.open("r", encoding="utf-8") as handle:
+        data = yaml.load(handle, Loader=_DeviceLoader)
+    return data if isinstance(data, dict) else {}
+
+
+def device_component_dependency(spec: DeviceSpec) -> dict[str, Any] | None:
+    """Return the ``esphome-components`` ``external_components`` entry the device
+    actually compiles against, or ``None`` when it declares none.
+
+    ESPHome resolves external components from the pinned ``ref`` in the device
+    YAML, not from ``fleet.yaml``, so this reads the true provenance straight
+    from the config that gets compiled instead of the fleet-wide anchor.
+    """
+    config = _load_device_config(spec.config)
+    entries = config.get("external_components")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        source = entry.get("source")
+        if isinstance(source, dict) and "esphome-components" in str(source.get("url", "")):
+            return entry
+    return None
+
+
 def iter_device_specs() -> list[DeviceSpec]:
     data = load_fleet()
     devices = data.get("devices", {})
