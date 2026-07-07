@@ -226,6 +226,8 @@ jobs:
 
       - name: Publish edge devices
         if: steps.publish_ready.outputs.ready == 'true' && steps.edge_devices.outputs.has_devices == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           devices="${{ steps.edge_devices.outputs.devices }}"
           uv run --locked python scripts/publish_packages.py --prune-edge --keep-edge 10 $devices

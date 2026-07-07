@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.error import URLError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -392,8 +393,15 @@ class FirmwarePackagingTests(unittest.TestCase):
 
         run.assert_not_called()
 
-    def test_prune_edge_oci_packages_deletes_old_edge_tags(self) -> None:
+    def test_prune_edge_oci_packages_deletes_old_edge_tags_via_packages_api(self) -> None:
+        versions = [
+            {"id": 1, "metadata": {"container": {"tags": ["v0.1.0"]}}},
+            {"id": 2, "metadata": {"container": {"tags": ["edge-20260620T180102Z-aaaaaaaaaaaa"]}}},
+            {"id": 3, "metadata": {"container": {"tags": ["edge-20260620T190102Z-bbbbbbbbbbbb"]}}},
+            {"id": 4, "metadata": {"container": {"tags": ["edge-20260619T190102Z-cccccccccccc"]}}},
+        ]
         with (
+            mock.patch.dict("os.environ", {"GHCR_TOKEN": "token"}, clear=False),
             mock.patch(
                 "publish_packages.list_oci_tags",
                 return_value=[
@@ -403,21 +411,54 @@ class FirmwarePackagingTests(unittest.TestCase):
                     "edge-20260619T190102Z-cccccccccccc",
                 ],
             ),
-            mock.patch("publish_packages.subprocess.run") as run,
+            mock.patch("publish_packages.list_ghcr_package_versions", return_value=versions),
+            mock.patch("publish_packages.delete_ghcr_package_version") as delete,
         ):
             removed = prune_edge_oci_packages("ghcr.io", "dephekt", "grow-fleet", "atoms3u-sensor-rig", keep=2)
 
         self.assertEqual(removed, ["edge-20260619T190102Z-cccccccccccc"])
-        run.assert_called_once_with(
-            [
-                "oras",
-                "manifest",
-                "delete",
-                "--force",
-                "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260619T190102Z-cccccccccccc",
-            ],
-            check=True,
-        )
+        delete.assert_called_once_with("dephekt", "grow-fleet-atoms3u-sensor-rig", 4, "token")
+
+    def test_prune_edge_oci_packages_skips_without_token(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {}, clear=True),
+            mock.patch(
+                "publish_packages.list_oci_tags",
+                return_value=[
+                    "edge-20260620T180102Z-aaaaaaaaaaaa",
+                    "edge-20260620T190102Z-bbbbbbbbbbbb",
+                    "edge-20260619T190102Z-cccccccccccc",
+                ],
+            ),
+            mock.patch("publish_packages.list_ghcr_package_versions") as versions,
+            mock.patch("publish_packages.delete_ghcr_package_version") as delete,
+        ):
+            removed = prune_edge_oci_packages("ghcr.io", "dephekt", "grow-fleet", "atoms3u-sensor-rig", keep=2)
+
+        self.assertEqual(removed, [])
+        versions.assert_not_called()
+        delete.assert_not_called()
+
+    def test_prune_edge_oci_packages_is_best_effort_on_delete_failure(self) -> None:
+        versions = [
+            {"id": 3, "metadata": {"container": {"tags": ["edge-20260620T190102Z-bbbbbbbbbbbb"]}}},
+            {"id": 4, "metadata": {"container": {"tags": ["edge-20260619T190102Z-cccccccccccc"]}}},
+        ]
+        with (
+            mock.patch.dict("os.environ", {"GHCR_TOKEN": "token"}, clear=False),
+            mock.patch(
+                "publish_packages.list_oci_tags",
+                return_value=[
+                    "edge-20260620T190102Z-bbbbbbbbbbbb",
+                    "edge-20260619T190102Z-cccccccccccc",
+                ],
+            ),
+            mock.patch("publish_packages.list_ghcr_package_versions", return_value=versions),
+            mock.patch("publish_packages.delete_ghcr_package_version", side_effect=URLError("boom")),
+        ):
+            removed = prune_edge_oci_packages("ghcr.io", "dephekt", "grow-fleet", "atoms3u-sensor-rig", keep=1)
+
+        self.assertEqual(removed, [])
 
     def test_edge_build_devices_selects_devices_without_previous_package(self) -> None:
         with mock.patch("edge_build_devices.latest_edge_manifest", return_value=None):
