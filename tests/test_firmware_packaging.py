@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from fleetlib import (  # noqa: E402
     assert_flashable_secrets,
+    device_component_dependency,
     device_names,
     device_spec,
     edge_version,
@@ -617,6 +618,44 @@ class FirmwarePackagingTests(unittest.TestCase):
         self.assertEqual(manifest["package_owner"], "stackdrift-firmware")
         self.assertEqual(manifest["build_profile"], "site-private")
         self.assertIs(manifest["flashable"], True)
+
+    def test_device_component_dependency_reads_pinned_ref_from_device_yaml(self) -> None:
+        atoms = device_component_dependency(device_spec("atoms3u-sensor-rig"))
+        self.assertIsNotNone(atoms)
+        self.assertIn("esphome-components", atoms["source"]["url"])
+        self.assertRegex(atoms["source"]["ref"], r"^[0-9a-f]{40}$")
+        # feather-air-monitor declares no external_components at all.
+        self.assertIsNone(device_component_dependency(device_spec("feather-air-monitor")))
+
+    def test_manifest_records_device_component_dependency_not_fleet_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ota = root / "firmware.ota.bin"
+            factory = root / "firmware.factory.bin"
+            dist = root / "dist"
+            ota.write_bytes(b"ota")
+            factory.write_bytes(b"factory")
+
+            with (
+                mock.patch("package_device.firmware_artifacts", return_value={"ota": ota, "factory": factory}),
+                mock.patch("package_device.esphome_version", return_value="ESPHome 2026.5.1"),
+                mock.patch("package_device.git_tags", return_value=[]),
+                mock.patch("package_device.git_commits", return_value=[]),
+            ):
+                manifest_path = package_device(
+                    "atoms3u-sensor-rig",
+                    "edge-20260620T180102Z-aaaaaaaaaaaa",
+                    "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd",
+                    dist,
+                    channel="edge",
+                )
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            manifest["component_dependency"],
+            device_component_dependency(device_spec("atoms3u-sensor-rig")),
+        )
 
     def test_checksum_helpers_hash_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
