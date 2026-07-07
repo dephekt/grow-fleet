@@ -14,7 +14,11 @@ on:
       - "fleet.yaml"
       - "scripts/**"
       - ".github/workflows/firmware.yml"
-  push: {}
+  push:
+    branches:
+      - "**"
+    tags:
+      - "firmware/**"
   workflow_dispatch:
     inputs:
       device:
