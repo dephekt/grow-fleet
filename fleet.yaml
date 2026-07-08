@@ -5,7 +5,7 @@ component_dependency: &stackdrift_esphome_components
   source:
     type: git
     url: https://github.com/dephekt/esphome-components.git
-    ref: 60fe507cb1f8e05078ab098db42f77b0d57fba85
+    ref: e709fe29ba2dccfd0d4646a33dbde1c0a736e235
     path: .
 
 devices:
