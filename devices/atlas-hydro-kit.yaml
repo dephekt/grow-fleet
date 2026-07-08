@@ -333,16 +333,15 @@ sensor:
     update_interval: 15s
     accuracy_decimals: 0
     # ±2% accuracy (~±30 µS/cm) means sub-integer digits are pure noise, so we
-    # round to whole µS/cm and can average freely: median rejects spikes, EMA
-    # smooths the trend line.
+    # round to whole µS/cm. Median-only: it rejects spikes and, unlike an EMA,
+    # carries no memory across an outage — an EMA accumulator survives NaN
+    # (unavailable) periods untouched and then bleeds stale garbage for ~10
+    # minutes after the circuit recovers.
     filters:
       - median:
           window_size: 3
           send_every: 3
           send_first_at: 2
-      - exponential_moving_average:
-          alpha: 0.3
-          send_every: 1
     power_control_switch: ec_enable
     rtd_sensor: rtd_sensor
     temp_compensation_switch: ec_temp_comp_enable
@@ -411,15 +410,13 @@ sensor:
     # ±(0.3 + 0.005·t) ≈ ±0.42°C at room temp, so tenths is the finest
     # meaningful digit. This RTD is also the temp-compensation source for the pH
     # and EC circuits, so a clean value here tightens those readings too.
-    # median (6 × 10s = 60s, well past the 8s response) + EMA for a stable line.
+    # median-only (6 × 10s = 60s, well past the 8s response): like EC, no EMA —
+    # its accumulator survives outages and bleeds stale values after recovery.
     filters:
       - median:
           window_size: 6
           send_every: 6
           send_first_at: 3
-      - exponential_moving_average:
-          alpha: 0.3
-          send_every: 1
     power_control_switch: rtd_enable
     web_server:
       sorting_group_id: overview
