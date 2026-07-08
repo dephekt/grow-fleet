@@ -40,7 +40,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 60fe507cb1f8e05078ab098db42f77b0d57fba85
+      ref: e709fe29ba2dccfd0d4646a33dbde1c0a736e235
       path: .
     components: ["ezo_types"]
 
@@ -255,14 +255,8 @@ sensor:
     # keeps the bus quiet around the EC circuit's 600ms read window.
     update_interval: 15s
     accuracy_decimals: 3
-    # median-only: publishes a real, un-blended 0.001-resolution reading every
-    # ~45s (3 samples), rejecting the single-sample spikes. The probe's ±0.002
-    # accuracy earns all three decimals, so we don't average them away.
-    filters:
-      - median:
-          window_size: 3
-          send_every: 3
-          send_first_at: 2
+    # Unfiltered (temporarily): publishing every raw reading for probe testing.
+    # Restore the median(3) spike-rejection filter when done.
     power_control_switch: ph_enable
     rtd_sensor: rtd_sensor
     temp_compensation_switch: ph_temp_comp_enable
