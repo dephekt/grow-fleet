@@ -1,0 +1,531 @@
+# Athom Smart Plug US V2 — Grow light actuator.
+#
+# Hardware (Athom Smart Plug US V2):
+#   SoC:    ESP8285 (ESP8266 core, 2 MB flash)
+#   Relay:  GPIO12
+#   Button: GPIO5  (active-low, INPUT_PULLUP)
+#   LED:    GPIO13 (status_led, inverted — LOW = ON)
+#   Power:  CSE7766 via UART RX (4800 baud, EVEN parity)
+#
+# Safety contract (differs from irrigation-pump on purpose):
+#   - relay restore_mode: RESTORE_DEFAULT_OFF — a power blip mid-photoperiod
+#     restores the light to its pre-blip state instead of leaving the canopy
+#     dark (or lit) until someone notices. A pump must fail OFF; a light must
+#     fail to WHATEVER IT WAS, because photoperiod interruptions stress the
+#     plants in both directions. Relay transitions flush preferences to flash
+#     immediately (see the relay's on_turn_on/off), so the restored state is
+#     the true pre-blip state, not a stale interval-synced copy.
+#   - No max-on watchdog: a grow light legitimately runs 12-18 h at a stretch.
+#   - Overcurrent cutoff at ${current_limit} A: photoperiod loses to fire
+#     safety. The trip watches RAW current samples (~1 s cadence, ahead of the
+#     10 s averaging filter) and LATCHES by disarming Light Schedule — the
+#     armed window would otherwise re-energize the faulted load within 30 s.
+#     Re-arm the schedule manually once the load is fixed.
+#
+# Scheduling contract (desired-state model):
+#   The photoperiod window lives IN THIS FIRMWARE. The control system only
+#   sets desired state — On Time, Off Time, and the Light Schedule arm switch
+#   (all persisted to flash) — and the plug applies and maintains it on its
+#   own sntp clock. The light keeps its photoperiod through app, broker, and
+#   Wi-Fi outages alike.
+#   - Window is half-open [on, off) in local wall time and may wrap midnight
+#     (18:00 -> 06:00 is a 12/12 flower window). on == off is an EMPTY window
+#     (always off) — disarm the schedule for manual control, don't set equal
+#     times to force a state.
+#   - DST edge case: the window is evaluated by level against local wall time,
+#     so on fall-back night an edge inside the repeated 01:00-02:00 hour fires
+#     twice (an off edge there re-lights for up to an hour); spring-forward
+#     shifts a 02:xx edge to 03:00. Avoid window edges in the 01:00-03:00 band
+#     if that matters.
+#   - While armed, the window is re-asserted every 30 s, so a manual/physical
+#     toggle against an armed schedule reverts within 30 s. That is the
+#     point: the schedule owns the relay. Disarm it to take manual control.
+#   - Until sntp syncs after boot, the relay stays in its restored state; the
+#     window takes over at first sync (on_time_sync) or next 30 s tick.
+#   - The timezone is desired state too: the Time Zone text entity holds a
+#     runtime POSIX-TZ override (empty = build default below); changes and
+#     clears both apply live, at the next 30 s tick. DST rules ride inside
+#     the string, so transitions happen on-device. dephekt/grow-app#69
+#     tracks the app-side site setting that will feed it.
+#
+# Flash / build:
+#   esphome compile devices/grow-light.yaml
+#   esphome run     devices/grow-light.yaml --device /dev/ttyUSB0
+#   esphome logs    devices/grow-light.yaml --device /dev/ttyUSB0
+
+substitutions:
+  devicename: grow-light
+  friendlyname: "Grow Light"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
+  sensor_update_interval: "10s"
+  # NEMA 5-15 (Athom US V2) is rated 15 A peak / 12 A continuous, and a grow
+  # light is a continuous load — a sustained 13-15 A draw overheats the plug
+  # without ever crossing a 16 A threshold. A light that legitimately needs
+  # more than 12 A does not belong on this plug.
+  current_limit: "12"
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.${devicename}
+    version: ${firmware_version}
+  # ESP8285 has 2 MB flash; lock to that ld script so PIO doesn't auto-pick 4 MB.
+  platformio_options:
+    board_upload.flash_size: 2MB
+    board_upload.maximum_size: 2097152
+    board_build.ldscript: eagle.flash.2m.ld
+
+esp8266:
+  board: esp8285
+  restore_from_flash: true
+
+# 1h, not the usual 5min: the energy accumulators dirty the single ESP8266
+# preferences sector on every metering update, so a 5 min interval erases that
+# sector ~150-200x/day on a 12-18 h photoperiod (~50-80k erases/year vs ~100k
+# rated endurance). Control state (relay, schedule arm, window times) doesn't
+# ride this interval — those flush immediately via global_preferences->sync()
+# in their automations below. Worst case a power cut loses ≤1 h of energy
+# accounting; it never loses control state.
+preferences:
+  flash_write_interval: 1h
+
+# Pinned one commit ahead of the fleet-wide anchor: the timezone component
+# merged to main in dephekt/esphome-components#12. Re-join the shared anchor
+# once it advances past this merge commit.
+external_components:
+  - source:
+      type: git
+      url: https://github.com/dephekt/esphome-components.git
+      ref: 744d21a1bd464af921b22e40affafd69aa5893a1
+      path: .
+    components: ["timezone"]
+
+logger:
+  level: INFO
+  # CSE7766 lives on the hardware UART (RX); baud_rate 0 disables the serial
+  # logger so it doesn't fight the power-meter UART.
+  baud_rate: 0
+
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+  # ESP8266 cannot verify TLS certificates (no cert store in firmware).
+  verify_ssl: false
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Never reboot for connectivity: the default 15 min reboot_timeout would
+  # restart the plug mid-outage, dropping the synced clock — and without a
+  # network sntp can't re-sync, so the photoperiod would freeze. An autonomous
+  # actuator rides out outages on its running clock instead.
+  reboot_timeout: 0s
+
+# MQTT -> site broker. Discovery scoped to grow/daniel-home/_discovery so
+# grow-app can derive entities from retained payloads without a global
+# homeassistant/# prefix.
+mqtt:
+  broker: 192.168.8.3              # media-server LAN IP; mosquitto-site :1883
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  # Same rationale as the wifi reboot_timeout: a broker outage must not
+  # reboot the plug out of its synced clock.
+  reboot_timeout: 0s
+  topic_prefix: grow/daniel-home/${devicename}
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/${devicename}/debug
+    level: NONE
+  on_connect:
+    - delay: 2s
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_firmware/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "${devicename}",
+            "projectName": "stackdrift.${devicename}",
+            "packageOwner": "${package_owner}",
+            "package": "${devicename}",
+            "device": "${devicename}",
+            "chipFamily": "ESP8266",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
+          }
+    # NOTE: "component" must match the MQTT discovery topic's component slug —
+    # ESPHome publishes text_sensor discovery under "sensor", so ip_address is
+    # declared as sensor here or grow-app never matches it.
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "${devicename}",
+            "groups": [
+              { "id": "overview", "title": "${friendlyname}", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "controls", "title": "Controls", "order": 20, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
+              { "id": "schedule", "title": "Photoperiod Schedule", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": true },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor",      "objectId": "light_power",          "group": "overview",    "role": "metric",        "order": 10, "label": "Light Power" },
+              { "component": "sensor",      "objectId": "voltage",              "group": "overview",    "role": "metric",        "order": 20 },
+              { "component": "sensor",      "objectId": "current",              "group": "overview",    "role": "metric",        "order": 30 },
+              { "component": "sensor",      "objectId": "total_daily_energy",   "group": "overview",    "role": "metric",        "order": 40, "label": "Daily Energy" },
+              { "component": "switch",      "objectId": "grow_light",           "group": "controls",    "role": "quick-control", "order": 10, "label": "Light" },
+              { "component": "switch",      "objectId": "light_schedule",       "group": "schedule",    "order": 10, "label": "Schedule Armed" },
+              { "component": "time",        "objectId": "light_on_time",        "group": "schedule",    "order": 20, "label": "On Time" },
+              { "component": "time",        "objectId": "light_off_time",       "group": "schedule",    "order": 30, "label": "Off Time" },
+              { "component": "text",        "objectId": "time_zone",            "group": "schedule",    "order": 40, "label": "Time Zone (POSIX)" },
+              { "component": "button",      "objectId": "check_firmware_update","group": "maintenance", "order": 10 },
+              { "component": "button",      "objectId": "restart",              "group": "maintenance", "order": 20 },
+              { "component": "sensor",      "objectId": "wifi_signal",          "group": "diagnostics", "order": 10 },
+              { "component": "sensor",      "objectId": "uptime",               "group": "diagnostics", "order": 20 },
+              { "component": "sensor",      "objectId": "ip_address",           "group": "diagnostics", "order": 30 }
+            ]
+          }
+
+# NOTE: web_server v2 used here. v3 requires considerably more flash/RAM for
+# its bundled React UI assets; ESP8285 (2 MB flash, ~80 KB heap after wifi/ssl)
+# becomes tight. v2 is the safe choice for 8266-class hardware.
+web_server:
+  version: 2
+  port: 80
+
+time:
+  - platform: sntp
+    id: sntp_time
+    # LAN first: the GL-MT6000's chrony serves NTP on the LAN, so a reboot
+    # during a WAN outage can still sync and run the schedule (pool.ntp.org
+    # alone would leave the photoperiod frozen until internet returned).
+    servers:
+      - 192.168.8.1
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    # Explicit: the schedule window is in LOCAL wall time. Without this the
+    # build bakes in whatever timezone the compiling host happens to have.
+    timezone: America/Chicago
+    on_time_sync:
+      - script.execute: apply_light_schedule
+
+# ─── Power metering (CSE7766) ─────────────────────────────────────────────────
+# Calibration: Athom ships NO explicit calibration multipliers for the CSE7766
+# in their published config — only the throttle/clamp filters below. Do not
+# invent numbers; the chip's factory cal is used directly.
+uart:
+  rx_pin: RX
+  baud_rate: 4800
+  parity: EVEN
+
+globals:
+  - id: total_energy_accum
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+
+sensor:
+  - platform: cse7766
+    current:
+      name: "Current"
+      id: plug_current
+      icon: mdi:current-ac
+      filters:
+        - throttle_average: ${sensor_update_interval}
+        # Suppress noise below 60 mA (relay leakage)
+        - lambda: if (x < 0.060) return 0.0; else return x;
+      # Safety trip on RAW samples (~1 s), not the published value: the
+      # throttle_average above would dilute a short fault below the threshold
+      # and delay detection by up to 10 s. Disarming Light Schedule first
+      # latches the trip — otherwise the armed window re-energizes the faulted
+      # load within 30 s. Re-arm manually after fixing the load.
+      on_raw_value:
+        - if:
+            condition:
+              lambda: return x > ${current_limit};
+            then:
+              - logger.log:
+                  level: ERROR
+                  format: "Overcurrent: %.1f A > ${current_limit} A — relay off, schedule disarmed"
+                  args: ["x"]
+              - switch.turn_off: light_schedule
+              - switch.turn_off: light_relay
+
+    voltage:
+      name: "Voltage"
+      id: plug_voltage
+      icon: mdi:sine-wave
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+    power:
+      name: "Light Power"
+      id: light_power
+      icon: mdi:lightbulb-on
+      filters:
+        - throttle_average: ${sensor_update_interval}
+        # Suppress standby noise below 3 W
+        - lambda: if (x < 3.0) return 0.0; else return x;
+
+    energy:
+      name: "Energy"
+      id: energy_sensor
+      icon: mdi:lightning-bolt
+      unit_of_measurement: kWh
+      filters:
+        - throttle: ${sensor_update_interval}
+        - multiply: 0.001
+      on_value:
+        then:
+          - lambda: |-
+              static float prev = 0.0;
+              float cur = id(energy_sensor).state;
+              id(total_energy_accum) += cur - prev;
+              prev = cur;
+              id(total_energy_template).update();
+
+    apparent_power:
+      name: "Apparent Power"
+      icon: mdi:power
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+    power_factor:
+      name: "Power Factor"
+      icon: mdi:percent-outline
+      filters:
+        - throttle_average: ${sensor_update_interval}
+
+  - platform: template
+    name: "Total Energy"
+    id: total_energy_template
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    icon: mdi:lightning-bolt
+    accuracy_decimals: 3
+    lambda: |-
+      return id(total_energy_accum);
+    # Publishes only via the energy sensor's on_value update() above — a poll
+    # interval here would double-publish while metering and republish the
+    # unchanged retained value every 10 s while the light is off.
+    update_interval: never
+
+  - platform: total_daily_energy
+    name: "Total Daily Energy"
+    id: daily_energy_sensor
+    restore: true
+    power_id: light_power
+    unit_of_measurement: kWh
+    icon: mdi:hours-24
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_sensor
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    update_interval: 60s
+    entity_category: diagnostic
+
+# ─── Status LED (GPIO13, active-low) ─────────────────────────────────────────
+light:
+  - platform: status_led
+    name: "Status LED"
+    id: blue_led
+    disabled_by_default: true
+    pin:
+      number: GPIO13
+      inverted: true
+
+# ─── Relay — Grow Light ───────────────────────────────────────────────────────
+switch:
+  - platform: gpio
+    name: "Grow Light"
+    id: light_relay
+    pin: GPIO12
+    # RESTORE_DEFAULT_OFF: after a power blip the relay comes back in its
+    # pre-blip state (persisted to flash), so a brownout mid-photoperiod does
+    # not silently leave the light off for the rest of the day. First boot
+    # ever defaults OFF. Once sntp syncs, an armed schedule overrides this
+    # restored state anyway.
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: mdi:lightbulb
+    # Flush preferences to flash on every transition so the restored state is
+    # the true pre-blip state. Without this the state rides the 1h interval
+    # sync (see preferences) and a power blip could restore a stale state.
+    # Relay toggles are rare (2/day from the schedule), so the flash cost is
+    # negligible; sync() is a no-op when nothing changed.
+    on_turn_on:
+      - lambda: global_preferences->sync();
+    on_turn_off:
+      - lambda: global_preferences->sync();
+
+  # Arms the firmware-resident photoperiod window (see header). OFF = manual
+  # control of the relay; ON = the window owns the relay and re-asserts it
+  # every 30 s. Disarming leaves the relay wherever it currently is.
+  - platform: template
+    name: "Light Schedule"
+    id: light_schedule
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: mdi:calendar-clock
+    on_turn_on:
+      - script.execute: apply_light_schedule
+      - lambda: global_preferences->sync();
+    on_turn_off:
+      - lambda: global_preferences->sync();
+
+# ─── Photoperiod window ───────────────────────────────────────────────────────
+# Defaults are a veg-friendly 18/6 (on 06:00, off 00:00). Values persist to
+# flash; the app (or the plug's web UI) edits them over MQTT.
+datetime:
+  - platform: template
+    name: "Light On Time"
+    id: light_on_time
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "06:00:00"
+    icon: mdi:weather-sunset-up
+    on_value:
+      - script.execute: apply_light_schedule
+      - lambda: global_preferences->sync();
+
+  - platform: template
+    name: "Light Off Time"
+    id: light_off_time
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "00:00:00"
+    icon: mdi:weather-sunset-down
+    on_value:
+      - script.execute: apply_light_schedule
+      - lambda: global_preferences->sync();
+
+interval:
+  - interval: 30s
+    then:
+      - script.execute: apply_light_schedule
+
+script:
+  - id: apply_light_schedule
+    then:
+      - lambda: |-
+          if (!id(light_schedule).state)
+            return;
+          auto now = id(sntp_time).now();
+          if (!now.is_valid())
+            return;
+          // Compare in seconds: the datetime entities accept hh:mm:ss over
+          // MQTT, and truncating to minutes would make times differing only
+          // in seconds collapse into the on == off empty-window branch.
+          const int t   = now.hour * 3600 + now.minute * 60 + now.second;
+          const int on  = id(light_on_time).hour * 3600 + id(light_on_time).minute * 60 + id(light_on_time).second;
+          const int off = id(light_off_time).hour * 3600 + id(light_off_time).minute * 60 + id(light_off_time).second;
+          bool want;
+          if (on == off)
+            want = false;                      // empty window — always off
+          else if (on < off)
+            want = (t >= on && t < off);       // same-day window
+          else
+            want = (t >= on || t < off);       // wraps midnight
+          if (want && !id(light_relay).state)
+            id(light_relay).turn_on();
+          else if (!want && id(light_relay).state)
+            id(light_relay).turn_off();
+
+# ─── Physical button (GPIO5) ─────────────────────────────────────────────────
+# Short press: toggle relay (manual override; an armed schedule re-asserts the
+# window within 30 s — disarm Light Schedule first for a lasting override).
+# Long press 4 s: factory reset (Athom pattern).
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 5
+      mode: INPUT_PULLUP
+      inverted: true
+    id: power_button
+    name: "Power Button"
+    # internal, not disabled_by_default: this entity exists only to drive
+    # on_multi_click, and grow-app ignores the enabled_by_default discovery
+    # hint — a merely-disabled entity leaks into its fallback "Other" section.
+    internal: true
+    on_multi_click:
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.2s
+        then:
+          - switch.toggle: light_relay
+      - timing:
+          - ON for at least 4s
+        then:
+          - button.press: factory_reset_button
+
+button:
+  - platform: template
+    name: "Check Firmware Update"
+    id: check_firmware_update
+    entity_category: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+
+  - platform: restart
+    name: "Restart"
+    id: restart_button
+    entity_category: diagnostic
+
+  # Keep factory reset accessible via long-press but hidden from MQTT/discovery.
+  - platform: factory_reset
+    name: "Factory Reset"
+    id: factory_reset_button
+    internal: true
+
+# ─── Timezone override ────────────────────────────────────────────────────────
+# Runtime POSIX-TZ override for the schedule clock (see header). Changes and
+# clears apply live at the next 30 s tick; clearing restores the build default.
+# Invalid strings (unparseable, over 63 chars, embedded NUL) are rejected and
+# the previous value re-published so an MQTT writer sees the write not take.
+text:
+  - platform: timezone
+    name: "Time Zone"
+    id: tz_override
+    time_id: sntp_time
+
+# ─── Diagnostics ─────────────────────────────────────────────────────────────
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      id: ip_address
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC Address"
+      entity_category: diagnostic
