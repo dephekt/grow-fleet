@@ -2,6 +2,9 @@
 /.platformio/
 /devices/.esphome/
 /devices/secrets.yaml
+# ESPHome CLI regenerates this boilerplate on every run; its two rules are
+# already covered by the /devices/ entries above.
+/devices/.gitignore
 /secrets.yaml
 /dist/
 *.log

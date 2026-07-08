@@ -49,6 +49,24 @@ devices:
     chip_family: ESP32-S2
     release: true
     component_dependency: *stackdrift_esphome_components
+  grow-light:
+    config: devices/grow-light.yaml
+    esphome_name: grow-light
+    node_id: grow-light
+    project_name: stackdrift.grow-light
+    package: grow-light
+    package_owner: stackdrift-firmware
+    chip_family: ESP8266
+    release: true
+    # Pinned ahead of the shared anchor: needs the timezone text platform,
+    # merged to main in dephekt/esphome-components#12 (this is its merge
+    # commit). Re-join the anchor once the shared pin advances past it.
+    component_dependency:
+      source:
+        type: git
+        url: https://github.com/dephekt/esphome-components.git
+        ref: 744d21a1bd464af921b22e40affafd69aa5893a1
+        path: .
   m5stack-airq:
     config: devices/m5stack-airq.yaml
     esphome_name: m5stack-airq
