@@ -50,7 +50,23 @@ devices:
     package_owner: stackdrift-firmware
     chip_family: ESP8266
     release: true
+    # assets = extra watched firmware inputs for CI impact detection; the
+    # shared plug base is compiled into this device via ESPHome packages.
+    assets:
+      - devices/packages/athom-plug-base.yaml
     component_dependency: *stackdrift_esphome_components
+  irrigation-pump:
+    config: devices/irrigation-pump.yaml
+    esphome_name: irrigation-pump
+    node_id: irrigation-pump
+    project_name: stackdrift.irrigation-pump
+    package: irrigation-pump
+    package_owner: stackdrift-firmware
+    chip_family: ESP8266
+    release: true
+    assets:
+      - devices/packages/athom-plug-base.yaml
+    # no component_dependency: this config declares no external_components
   m5stack-airq:
     config: devices/m5stack-airq.yaml
     esphome_name: m5stack-airq
@@ -61,3 +77,15 @@ devices:
     chip_family: ESP32-S3
     release: true
     component_dependency: *stackdrift_esphome_components
+  runoff-monitor:
+    config: devices/runoff-monitor.yaml
+    esphome_name: runoff-monitor
+    node_id: runoff-monitor
+    project_name: stackdrift.runoff-monitor
+    package: runoff-monitor
+    package_owner: stackdrift-firmware
+    chip_family: ESP8266
+    release: true
+    assets:
+      - devices/packages/athom-plug-base.yaml
+    # no component_dependency: this config declares no external_components
