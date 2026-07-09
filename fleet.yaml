@@ -52,7 +52,9 @@ devices:
     release: true
     # assets = extra watched firmware inputs for CI impact detection; the
     # shared plug base is compiled into this device via ESPHome packages.
-    assets:
+    # Anchored so the other Athom plugs reference the same list (see the
+    # &stackdrift_esphome_components convention above).
+    assets: &athom_plug_assets
       - devices/packages/athom-plug-base.yaml
     component_dependency: *stackdrift_esphome_components
   irrigation-pump:
@@ -64,8 +66,7 @@ devices:
     package_owner: stackdrift-firmware
     chip_family: ESP8266
     release: true
-    assets:
-      - devices/packages/athom-plug-base.yaml
+    assets: *athom_plug_assets
     # no component_dependency: this config declares no external_components
   m5stack-airq:
     config: devices/m5stack-airq.yaml
@@ -86,6 +87,5 @@ devices:
     package_owner: stackdrift-firmware
     chip_family: ESP8266
     release: true
-    assets:
-      - devices/packages/athom-plug-base.yaml
+    assets: *athom_plug_assets
     # no component_dependency: this config declares no external_components
