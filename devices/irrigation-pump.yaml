@@ -65,8 +65,13 @@ mqtt:
           }
 
 # ─── Relay — Irrigation Pump ──────────────────────────────────────────────────
-# NOTE: keep switch: before number: — ESP8266 preference offsets are
-# positional in setup order (see the base package header).
+# NOTE: ESP8266 preference offsets are positional in component setup order (see
+# the base package header). pump_relay is ALWAYS_OFF, so it allocates NO
+# preference and its position is irrelevant here — the offset-bearing components
+# are the base's total_energy_accum + total_daily_energy plus this file's
+# irrigation_seconds number. Don't insert another restoring component (a number,
+# datetime, or RESTORE_* switch) ahead of irrigation_seconds, or its saved value
+# resets on the next OTA.
 switch:
   - platform: gpio
     name: "Irrigation Pump"
