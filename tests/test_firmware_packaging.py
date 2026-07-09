@@ -90,6 +90,12 @@ class FirmwarePackagingTests(unittest.TestCase):
     def test_device_asset_change_impacts_asset_owner(self) -> None:
         self.assertEqual(firmware_impacted_devices(["assets/thermal_overlay.js"]), ["atoms3u-sensor-rig"])
 
+    def test_shared_plug_base_change_impacts_all_plug_devices(self) -> None:
+        self.assertEqual(
+            firmware_impacted_devices(["devices/packages/athom-plug-base.yaml"]),
+            ["grow-light", "irrigation-pump", "runoff-monitor"],
+        )
+
     def test_airq_is_included_in_release_selection(self) -> None:
         self.assertIn("m5stack-airq", device_names())
         self.assertIn("m5stack-airq", device_names(release_only=True))
