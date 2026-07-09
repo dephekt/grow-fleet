@@ -126,6 +126,35 @@ mqtt:
               { "component": "sensor",      "objectId": "ip_address",           "group": "diagnostics", "order": 30 }
             ]
           }
+    # This plug is the anchor for the "main" logical light: it owns the name/type
+    # plus the on/off relay, the photoperiod schedule, and power metering. The DAC
+    # dimmer lives on a different node (atoms3u-sensor-rig) and publishes its own
+    # _lights fragment; grow-app merges both by light id into one Main Light card.
+    # Roles reference this node's own MQTT objectIds.
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_lights/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-lights.v1",
+            "nodeId": "${devicename}",
+            "lights": [
+              {
+                "id": "main",
+                "name": "Main Light",
+                "type": "full-spectrum",
+                "order": 10,
+                "roles": {
+                  "power": "grow_light",
+                  "scheduleArm": "light_schedule",
+                  "onTime": "light_on_time",
+                  "offTime": "light_off_time",
+                  "metrics": ["light_power", "apparent_power", "voltage", "current", "power_factor", "total_daily_energy"]
+                }
+              }
+            ]
+          }
 
 time:
   - id: !extend sntp_time

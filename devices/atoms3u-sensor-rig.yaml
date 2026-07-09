@@ -27,6 +27,18 @@ esphome:
   project:
     name: stackdrift.atoms3u-sensor-rig
     version: ${firmware_version}
+  on_boot:
+    # Re-assert the restored dimmer level once everything is set up. The template
+    # number restores its saved value in setup() via publish_state() only — it does
+    # NOT re-fire set_action — and the GP8413 powers up at 0V (its setup() writes
+    # only the range register). Without this the slider would read e.g. 80% while
+    # the light sat dark until the next manual change. Priority -100 runs after all
+    # component setup(), so the number is restored and the DAC hub range is set.
+    - priority: -100
+      then:
+        - output.set_level:
+            id: grow_light_dac_level
+            level: !lambda 'return id(grow_light_brightness).state / 100.0;'
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -117,6 +129,7 @@ mqtt:
             "nodeId": "atoms3u-sensor-rig",
             "groups": [
               { "id": "overview", "title": "Environment", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "grow_light", "title": "Grow Light", "order": 12, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
               { "id": "thermal_view", "title": "Thermal Camera", "order": 15, "variant": "camera", "surface": "dashboard", "defaultOpen": true },
               { "id": "thresholds", "title": "Thresholds & Alerts", "order": 20, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
               { "id": "thermal", "title": "Thermal Camera", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
@@ -131,6 +144,7 @@ mqtt:
               { "component": "sensor", "objectId": "vpd", "group": "overview", "role": "metric", "order": 40, "label": "Air VPD" },
               { "component": "sensor", "objectId": "illuminance", "group": "overview", "role": "metric", "order": 50 },
               { "component": "sensor", "objectId": "barometric_pressure", "group": "overview", "role": "metric", "order": 60, "label": "Pressure" },
+              { "component": "number", "objectId": "grow_light_brightness", "group": "grow_light", "role": "quick-control", "order": 10, "label": "Brightness" },
               { "component": "camera", "objectId": "thermal_camera", "group": "thermal_view", "role": "camera", "order": 10, "label": "Thermal Camera" },
               { "component": "binary_sensor", "objectId": "air_sensor_offline", "group": "thresholds", "order": 5 },
               { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
@@ -174,6 +188,22 @@ mqtt:
               { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
             ]
           }
+    # This node's contribution to the logical grow lights: the DAC channel is the
+    # dimmer for "main". grow-app merges every device's _lights fragment by light id,
+    # so the Main Light card pulls on/off + schedule + power from the plug and this
+    # dimmer from here. Add channel 1 as another light's dimmer the same way later.
+    - mqtt.publish:
+        topic: grow/daniel-home/atoms3u-sensor-rig/_lights/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-lights.v1",
+            "nodeId": "atoms3u-sensor-rig",
+            "lights": [
+              { "id": "main", "roles": { "dimmer": "grow_light_brightness" } }
+            ]
+          }
     - mqtt.publish:
         topic: grow/daniel-home/_discovery/camera/atoms3u-sensor-rig/thermal_camera/config
         retain: true
@@ -195,6 +225,24 @@ i2c:
   scl: 1            # AtomS3U Grove Port A: G1 = GPIO1 = SCL
   frequency: 400kHz # MLX90640 full-frame readout is bandwidth-heavy
   scan: true
+
+# ---------------- Grow-light dimmer (M5Stack Unit DAC2 / GP8413) ----------------
+# 0-10V dimmer wired to the SF4000's RJ-11 port (V0 -> DIM+, G -> DIM-), chained on
+# the Grove Port A I2C bus above. ESPHome's built-in gp8403 output drives it; the
+# GP8413 is the 15-bit model. This DAC2 answers at 0x59 (confirmed on the unit; the
+# component default is 0x58). The dimmer level is a template number below; the
+# /lights page in grow-app maps it onto the Main Light card via the _lights fragment.
+gp8403:
+  - id: grow_light_dac
+    model: GP8413
+    voltage: 10V
+    address: 0x59
+
+output:
+  - platform: gp8403
+    id: grow_light_dac_level
+    gp8403_id: grow_light_dac
+    channel: 0        # V0 screw terminal — the DIM+ wiring
 
 time:
   - platform: sntp
@@ -628,6 +676,28 @@ number:
     optimistic: true
     mode: box
     web_server: { sorting_group_id: calibration, sorting_weight: 30 }
+
+  # SF4000 dimmer level. Maps 0-100% linearly to the DAC's 0-10V output on channel 0
+  # (V0). set_action drives the DAC on every app/web write; the esphome.on_boot hook
+  # above re-applies the restored value at startup (setup() only publishes it). The
+  # relay on the smart plug still owns real on/off — this only sets brightness.
+  - platform: template
+    name: "Grow Light Brightness"
+    id: grow_light_brightness
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 100
+    restore_value: true
+    optimistic: true
+    mode: slider
+    icon: mdi:brightness-percent
+    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 5 }
+    set_action:
+      - output.set_level:
+          id: grow_light_dac_level
+          level: !lambda 'return x / 100.0;'
 select:
   - platform: template
     name: "Dummy Template Select"
