@@ -93,9 +93,8 @@ esp8266:
 preferences:
   flash_write_interval: 1h
 
-# Pinned one commit ahead of the fleet-wide anchor: the timezone component
-# merged to main in dephekt/esphome-components#12. Re-join the shared anchor
-# once it advances past this merge commit.
+# The timezone platform is pulled from the pinned stackdrift/esphome-components
+# commit tracked in fleet.yaml.
 external_components:
   - source:
       type: git

@@ -5,7 +5,7 @@ component_dependency: &stackdrift_esphome_components
   source:
     type: git
     url: https://github.com/dephekt/esphome-components.git
-    ref: e709fe29ba2dccfd0d4646a33dbde1c0a736e235
+    ref: 744d21a1bd464af921b22e40affafd69aa5893a1
     path: .
 
 devices:
@@ -30,15 +30,7 @@ devices:
     release: true
     assets:
       - assets/thermal_overlay.js
-    # Pinned ahead of the shared anchor: this rig needs the hardened qmp6988
-    # component and the m5stack_thermal2 driver, neither of which is in the
-    # fleet-wide pin yet. Re-join the anchor once the shared pin advances past it.
-    component_dependency:
-      source:
-        type: git
-        url: https://github.com/dephekt/esphome-components.git
-        ref: 012995f7a3d911e5fb18fa4a9115ff6575dedecc
-        path: .
+    component_dependency: *stackdrift_esphome_components
   feather-air-monitor:
     config: devices/feather-air-monitor.yaml
     esphome_name: feather-air-monitor
@@ -58,15 +50,7 @@ devices:
     package_owner: stackdrift-firmware
     chip_family: ESP8266
     release: true
-    # Pinned ahead of the shared anchor: needs the timezone text platform,
-    # merged to main in dephekt/esphome-components#12 (this is its merge
-    # commit). Re-join the anchor once the shared pin advances past it.
-    component_dependency:
-      source:
-        type: git
-        url: https://github.com/dephekt/esphome-components.git
-        ref: 744d21a1bd464af921b22e40affafd69aa5893a1
-        path: .
+    component_dependency: *stackdrift_esphome_components
   m5stack-airq:
     config: devices/m5stack-airq.yaml
     esphome_name: m5stack-airq

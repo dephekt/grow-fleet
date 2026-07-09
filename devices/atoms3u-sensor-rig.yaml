@@ -40,7 +40,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 012995f7a3d911e5fb18fa4a9115ff6575dedecc
+      ref: 744d21a1bd464af921b22e40affafd69aa5893a1
       path: .
     components:
       - m5stack_thermal2
