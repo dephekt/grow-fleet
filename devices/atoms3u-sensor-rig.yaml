@@ -34,11 +34,15 @@ esphome:
     # only the range register). Without this the slider would read e.g. 80% while
     # the light sat dark until the next manual change. Priority -100 runs after all
     # component setup(), so the number is restored and the DAC hub range is set.
+    #
+    # Re-apply via number.set (not output.set_level) so the 0-100% -> 0-10V mapping
+    # lives only in the number's set_action below; control() fires that action and
+    # re-saves to NVS — a negligible no-op once per boot.
     - priority: -100
       then:
-        - output.set_level:
-            id: grow_light_dac_level
-            level: !lambda 'return id(grow_light_brightness).state / 100.0;'
+        - number.set:
+            id: grow_light_brightness
+            value: !lambda 'return id(grow_light_brightness).state;'
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -232,6 +236,23 @@ i2c:
 # GP8413 is the 15-bit model. This DAC2 answers at 0x59 (confirmed on the unit; the
 # component default is 0x58). The dimmer level is a template number below; the
 # /lights page in grow-app maps it onto the Main Light card via the _lights fragment.
+#
+# SPLIT-DOMAIN CAVEATS (on/off lives on the plug, brightness lives here):
+#   - Fail-to-bright risk: the plug is a hardened autonomous actuator (rides out
+#     outages on its own clock); this bench node is NOT. If this node dies while the
+#     plug keeps the relay energized per its photoperiod, V0 stops being driven and
+#     many 0-10V LED drivers (SF-series included) read a floating dim input as 100%
+#     — uncontrolled full intensity from the one node that can dim it. A pulldown on
+#     V0 -> DIM+ makes a dead DAC fail to minimum instead (confirm the SF4000's
+#     actual open-input behavior before relying on it).
+#   - Cold-boot transient: on whole-tent power restore the ESP8266 plug boots in a
+#     few seconds and re-energizes the relay, while this ESP32-S3 boots slower and
+#     holds the DAC at 0V until the priority -100 re-assert — so the canopy sits at
+#     ~min brightness for a few seconds, then jumps to the restored level.
+#   - Fragile join: the logical light is stitched from two independently-flashed
+#     images by a matching "id":"main" + "schema":"grow-lights.v1" in this node's
+#     _lights fragment and the plug's. Rename the id or bump the schema on one node
+#     only and grow-app silently drops the dimmer (no compile/MQTT/log error).
 gp8403:
   - id: grow_light_dac
     model: GP8413
