@@ -39,19 +39,19 @@ esphome:
   on_boot:
     # Power the STEMMA-QT (I²C) + TFT rail BEFORE the I²C/SPI buses and the SHT45
     # set up (priority above BUS=1000), so the sensor and screen come up cleanly.
-    # Raw Arduino writes avoid any output-component setup-ordering race.
+    # Raw GPIO writes avoid any output-component setup-ordering race.
     - priority: 1100
       then:
         - lambda: |-
-            pinMode(7, OUTPUT);
-            digitalWrite(7, HIGH);    // TFT_I2C_POWER: enable STEMMA-QT (I²C) + TFT power
-            pinMode(45, OUTPUT);
-            digitalWrite(45, HIGH);   // TFT backlight on
+            gpio_set_direction((gpio_num_t) 7, GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t) 7, 1);     // TFT_I2C_POWER: enable STEMMA-QT (I²C) + TFT power
+            gpio_set_direction((gpio_num_t) 45, GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t) 45, 1);    // TFT backlight on
 
 esp32:
   board: adafruit_feather_esp32s2_reversetft
   framework:
-    type: arduino
+    type: esp-idf
 
 logger:
   level: DEBUG            # DEBUG during bring-up to see the I²C scan + live values
