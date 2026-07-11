@@ -1,16 +1,27 @@
-# Athom Smart Plug US V2 — Irrigation pump actuator.
+# Athom Smart Plug US V2 — Irrigation pump monitor + maintenance override.
 #
 # The shared plug baseline (hardware map, power metering, MQTT/OTA transport,
-# diagnostics) lives in packages/athom-plug-base.yaml; this file holds only
-# the irrigation-specific contract.
+# diagnostics, sntp + America/Chicago timezone) lives in
+# packages/athom-plug-base.yaml; this file holds only the irrigation-pump
+# contract.
 #
-# Safety contract:
-#   - relay restore_mode: ALWAYS_OFF  — power blip can never start the pump.
-#   - Hard watchdog: on_turn_on delay 150 s -> turn_off (absolute max-on cap,
-#     longer than the max script pulse of 120 s).
-#   - Script mode: restart — re-trigger resets the window, not starts a second.
+# Role:
+#   The SeaFlo irrigation pump is powered by design and self-cycles on its own
+#   pressure switch — the OpenSprinkler valve gates irrigation, NOT this relay.
+#   This plug is telemetry (Pump Power draw) plus a manual override to cut
+#   supply for maintenance. It is not an actuator.
+#
+# Relay contract:
+#   - restore_mode: RESTORE_DEFAULT_ON — powered on by default and re-energized
+#     after a power blip, but a deliberate maintenance-off persists across a
+#     reboot. (Contrast the runoff bilge pump: ALWAYS_ON + internal, must never
+#     be cut.)
 #   - Overcurrent (raw sample > ${current_limit} A, detected in the base
-#     package): relay off — see overcurrent_trip below.
+#     package): relay off — fire safety wins over "always on" (overcurrent_trip).
+#
+# Time: the base package's sntp is baked to America/Chicago (DST-correct), which
+# is all total_daily_energy needs for a local-midnight reset. No schedule and no
+# runtime timezone entity here — there is no wall-clock behavior to reconcile.
 #
 # Flash / build:
 #   make build irrigation-pump
@@ -43,83 +54,42 @@ mqtt:
             "nodeId": "${devicename}",
             "groups": [
               { "id": "overview", "title": "Irrigation", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
-              { "id": "controls", "title": "Controls", "order": 20, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
               { "id": "settings", "title": "Settings", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
               { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
               { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
             ],
             "entities": [
-              { "component": "sensor",        "objectId": "pump_power",          "group": "overview",     "role": "metric",        "order": 10, "label": "Pump Power" },
-              { "component": "sensor",        "objectId": "voltage",             "group": "overview",     "role": "metric",        "order": 20 },
-              { "component": "sensor",        "objectId": "current",             "group": "overview",     "role": "metric",        "order": 30 },
-              { "component": "sensor",        "objectId": "total_daily_energy",  "group": "overview",     "role": "metric",        "order": 40, "label": "Daily Energy" },
-              { "component": "button",        "objectId": "irrigate_now",        "group": "controls",     "role": "quick-control", "order": 10 },
-              { "component": "number",        "objectId": "irrigation_duration", "group": "controls",     "role": "quick-control", "order": 20, "label": "Duration (s)" },
-              { "component": "switch",        "objectId": "irrigation_pump",     "group": "settings",     "order": 10, "label": "Relay (manual)" },
-              { "component": "button",        "objectId": "check_firmware_update","group": "maintenance", "order": 10 },
-              { "component": "button",        "objectId": "restart",             "group": "maintenance",  "order": 20 },
-              { "component": "sensor",        "objectId": "wifi_signal",  "group": "diagnostics",  "order": 10 },
-              { "component": "sensor",        "objectId": "uptime",       "group": "diagnostics",  "order": 20 },
-              { "component": "sensor",        "objectId": "ip_address",          "group": "diagnostics",  "order": 30 }
+              { "component": "sensor",        "objectId": "pump_power",           "group": "overview",     "role": "metric", "order": 10, "label": "Pump Power" },
+              { "component": "sensor",        "objectId": "voltage",              "group": "overview",     "role": "metric", "order": 20 },
+              { "component": "sensor",        "objectId": "current",              "group": "overview",     "role": "metric", "order": 30 },
+              { "component": "sensor",        "objectId": "total_daily_energy",   "group": "overview",     "role": "metric", "order": 40, "label": "Daily Energy" },
+              { "component": "switch",        "objectId": "irrigation_pump",      "group": "settings",     "order": 10, "label": "Pump Supply (maintenance)" },
+              { "component": "button",        "objectId": "check_firmware_update","group": "maintenance",  "order": 10 },
+              { "component": "button",        "objectId": "restart",              "group": "maintenance",  "order": 20 },
+              { "component": "sensor",        "objectId": "wifi_signal",          "group": "diagnostics",  "order": 10 },
+              { "component": "sensor",        "objectId": "uptime",               "group": "diagnostics",  "order": 20 },
+              { "component": "sensor",        "objectId": "ip_address",           "group": "diagnostics",  "order": 30 }
             ]
           }
 
-# ─── Relay — Irrigation Pump ──────────────────────────────────────────────────
-# NOTE: ESP8266 preference offsets are positional in component setup order (see
-# the base package header). pump_relay is ALWAYS_OFF, so it allocates NO
-# preference and its position is irrelevant here — the offset-bearing components
-# are the base's total_energy_accum + total_daily_energy plus this file's
-# irrigation_seconds number. Don't insert another restoring component (a number,
-# datetime, or RESTORE_* switch) ahead of irrigation_seconds, or its saved value
-# resets on the next OTA.
+# ─── Relay — Irrigation Pump supply ───────────────────────────────────────────
+# On by design; the switch (or the physical button) cuts supply for maintenance.
+# Flush to flash on each transition so a power blip restores the true last state
+# (e.g. an overcurrent-off or a maintenance-off is not lost to the 1 h sync).
 switch:
   - platform: gpio
     name: "Irrigation Pump"
     id: pump_relay
     pin: GPIO12
-    # ALWAYS_OFF: a reboot or power blip must NEVER start the pump.
-    restore_mode: ALWAYS_OFF
+    restore_mode: RESTORE_DEFAULT_ON
     icon: mdi:water-pump
     on_turn_on:
-      # Hard watchdog: unconditionally turn the relay off after 150 s.
-      # This fires even if the relay was turned on directly (bypassing the
-      # script), capping the absolute max-on time regardless of cause.
-      # 150 s > max script pulse (120 s) so a legitimate full-duration run
-      # completes before the watchdog fires.
-      - delay: 150s
-      - switch.turn_off: pump_relay
-
-# ─── Irrigation Duration ──────────────────────────────────────────────────────
-number:
-  - platform: template
-    name: "Irrigation Duration"
-    id: irrigation_seconds
-    min_value: 5
-    max_value: 120
-    step: 5
-    initial_value: 60
-    optimistic: true
-    restore_value: true
-    unit_of_measurement: s
-    icon: mdi:timer-outline
-    mode: slider
-    # Flush to flash immediately: preferences ride a 1 h interval sync (see
-    # the base package), which could otherwise lose a fresh setting to a
-    # power cut.
-    on_value:
+      - lambda: global_preferences->sync();
+    on_turn_off:
       - lambda: global_preferences->sync();
 
-# ─── Irrigate Now button ──────────────────────────────────────────────────────
-button:
-  - platform: template
-    name: "Irrigate Now"
-    id: irrigate_now
-    icon: mdi:water
-    on_press:
-      - script.execute: irrigate
-
 # ─── Physical button (GPIO5) ─────────────────────────────────────────────────
-# Short press: toggle relay (manual override; watchdog still applies).
+# Short press: toggle the relay (local maintenance override).
 # Long press 4 s: factory reset (from the base package).
 binary_sensor:
   - id: !extend power_button
@@ -132,17 +102,8 @@ binary_sensor:
 
 # ─── Scripts ──────────────────────────────────────────────────────────────────
 script:
-  # mode: restart — if fired while already running, the current delay is
-  # cancelled and the window resets from the beginning.
-  - id: irrigate
-    mode: restart
-    then:
-      - switch.turn_on: pump_relay
-      - delay: !lambda "return id(irrigation_seconds).state * 1000;"
-      - switch.turn_off: pump_relay
-
-  # Overcurrent response (detection in the base package): a pump fault must
-  # never keep the relay energized.
+  # Overcurrent response (detection in the base package): a pump fault must not
+  # keep the relay energized — fire safety wins over "always on".
   - id: overcurrent_trip
     parameters:
       amps: float
