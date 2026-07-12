@@ -1,0 +1,122 @@
+# Non-ESPHome (Arduino) fleet firmware — sibling to firmware.yml.
+# Builds arduino_devices from fleet.yaml with arduino-cli, LZSS-compresses +
+# wraps the binary into a .ota, and publishes the same grow-firmware-package.v1
+# OCI artifact grow-app already serves. Reuses scripts/{build_arduino,
+# publish_packages,fleetlib,install_firmware_secrets}.py. The ESPHome firmware.yml
+# is untouched.
+name: Arduino Firmware
+
+on:
+  push:
+    branches: [main]                     # edge publish
+    tags: ["arduino-firmware/**"]        # stable publish (arduino-firmware/<device>/vX.Y.Z)
+    paths:
+      - "arduino/**"
+      - "scripts/build_arduino.py"
+      - "scripts/publish_packages.py"
+      - "scripts/fleetlib.py"
+      - "scripts/install_firmware_secrets.py"
+      - "fleet.yaml"
+      - ".github/workflows/arduino-firmware.yml"
+  pull_request:
+    paths:
+      - "arduino/**"
+      - "scripts/build_arduino.py"
+      - "fleet.yaml"
+      - ".github/workflows/arduino-firmware.yml"
+  workflow_dispatch:
+
+env:
+  OCI_REGISTRY: ghcr.io
+  OCI_OWNER: dephekt
+  OCI_PACKAGE_PREFIX: grow-fleet
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+      - name: Install core + libraries
+        run: |
+          set -eu
+          arduino-cli core update-index
+          arduino-cli core install arduino:renesas_uno
+          arduino-cli lib install ArduinoJson ArduinoHttpClient ArduinoMqttClient
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v2.0.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - id: publish_ready
+        name: Check protected publish configuration
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: |
+          set -eu
+          if [ -z "${FLEET_SECRETS_YAML_B64:-}" ] || [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::notice::Compile-only (no FLEET_SECRETS_YAML_B64, or a pull_request)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install firmware secrets
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
+        run: uv run --locked python scripts/install_firmware_secrets.py --require-flashable
+
+      - id: meta
+        name: Resolve device + version + profile
+        env:
+          READY: ${{ steps.publish_ready.outputs.ready }}
+        run: |
+          set -eu
+          if [[ "${GITHUB_REF:-}" == refs/tags/arduino-firmware/* ]]; then
+            rest="${GITHUB_REF_NAME#arduino-firmware/}"
+            device="${rest%%/v*}"
+            version="${GITHUB_REF_NAME#arduino-firmware/${device}/}"
+          else
+            device="spectrometer"
+            version="edge-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)"
+          fi
+          if [ "$READY" = "true" ]; then profile="site-private"; else profile="ci-placeholder"; fi
+          echo "device=$device" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GHCR_USER:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
+            echo "GHCR_USER and GHCR_TOKEN are required to publish" >&2
+            exit 1
+          fi
+          printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
+
+      - name: Build, package, and (when configured) publish
+        env:
+          OCI_SOURCE_URL: https://github.com/${{ github.repository }}
+        run: |
+          set -eu
+          extra=""
+          if [ "${{ steps.meta.outputs.profile }}" = "site-private" ]; then
+            extra="--require-flashable-secrets --publish"
+          fi
+          uv run --locked python scripts/build_arduino.py "${{ steps.meta.outputs.device }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --source-sha "$(git rev-parse HEAD)" \
+            --build-profile "${{ steps.meta.outputs.profile }}" \
+            $extra
