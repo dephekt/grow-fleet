@@ -59,6 +59,10 @@ uint32_t integ_ms = 8;
 
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
+// Separate socket for the OTA manifest/binary fetch. Sharing wifiClient would make
+// http.get() commandeer the same TCP connection and drop the live MQTT session on
+// every firmware check (forcing a reconnect + retained-config re-publish).
+WiFiClient httpWifi;
 
 // firmware-check cadence
 const unsigned long FW_CHECK_INTERVAL_MS = 3600000UL;   // hourly
@@ -152,7 +156,7 @@ void publishSpectrum(bool sat) {
 // LZSS-compressed .ota over plain HTTP and self-flash (reboots into the new fw).
 void checkForUpdate() {
   if (WiFi.status() != WL_CONNECTED) return;
-  HttpClient http(wifiClient, GROW_APP_HOST, GROW_APP_PORT);
+  HttpClient http(httpWifi, GROW_APP_HOST, GROW_APP_PORT);
   String path = String(MANIFEST_PATH) + "?token=" + SECRET_FIRMWARE_UPDATE_TOKEN;
   http.get(path);
   int status = http.responseStatusCode();

@@ -76,17 +76,24 @@ def arduino_cli() -> list[str]:
     return shlex.split(os.environ.get("ARDUINO_CLI", "arduino-cli"))
 
 
+def _c_string(value: str) -> str:
+    """Escape a value for embedding inside a C string literal. A secret containing
+    a backslash or double-quote (all legal in WiFi/MQTT passwords and tokens) would
+    otherwise produce a broken or silently-altered #define."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def write_secrets_header(sketch_dir: Path) -> None:
     ensure_secrets_link()
     s = secret_values()  # devices/secrets.yaml (real) or ci/secrets.yaml placeholders
     (sketch_dir / "arduino_secrets.h").write_text(
-        f'#define SECRET_SSID "{s["wifi_ssid"]}"\n'
-        f'#define SECRET_PASS "{s["wifi_password"]}"\n'
+        f'#define SECRET_SSID "{_c_string(s["wifi_ssid"])}"\n'
+        f'#define SECRET_PASS "{_c_string(s["wifi_password"])}"\n'
         f'#define SECRET_MQTT_BROKER "{MQTT_BROKER}"\n'
         f"#define SECRET_MQTT_PORT {MQTT_PORT}\n"
         f'#define SECRET_MQTT_USER "{MQTT_USER}"\n'
-        f'#define SECRET_MQTT_PASS "{s["mqtt_password"]}"\n'
-        f'#define SECRET_FIRMWARE_UPDATE_TOKEN "{s["firmware_update_token"]}"\n',
+        f'#define SECRET_MQTT_PASS "{_c_string(s["mqtt_password"])}"\n'
+        f'#define SECRET_FIRMWARE_UPDATE_TOKEN "{_c_string(s["firmware_update_token"])}"\n',
         encoding="utf-8",
     )
 
