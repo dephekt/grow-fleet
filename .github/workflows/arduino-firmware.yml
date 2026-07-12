@@ -79,7 +79,7 @@ jobs:
         run: uv run --locked python scripts/install_firmware_secrets.py --require-flashable
 
       - id: meta
-        name: Resolve device + version + profile
+        name: Resolve device(s) + version + profile
         env:
           READY: ${{ steps.publish_ready.outputs.ready }}
         run: |
@@ -88,12 +88,14 @@ jobs:
             rest="${GITHUB_REF_NAME#arduino-firmware/}"
             device="${rest%%/v*}"
             version="${GITHUB_REF_NAME#arduino-firmware/${device}/}"
+            devices="$device"
           else
-            device="spectrometer"
+            # edge: build/publish every device registered under arduino_devices in fleet.yaml
+            devices="$(uv run --locked python -c 'import yaml; print(" ".join((yaml.safe_load(open("fleet.yaml")).get("arduino_devices") or {}).keys()))')"
             version="edge-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)"
           fi
           if [ "$READY" = "true" ]; then profile="site-private"; else profile="ci-placeholder"; fi
-          echo "device=$device" >> "$GITHUB_OUTPUT"
+          echo "devices=$devices" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
 
@@ -119,8 +121,10 @@ jobs:
           if [ "${{ steps.meta.outputs.profile }}" = "site-private" ]; then
             extra="--require-flashable-secrets --publish"
           fi
-          uv run --locked python scripts/build_arduino.py "${{ steps.meta.outputs.device }}" \
-            --version "${{ steps.meta.outputs.version }}" \
-            --source-sha "$(git rev-parse HEAD)" \
-            --build-profile "${{ steps.meta.outputs.profile }}" \
-            $extra
+          for device in ${{ steps.meta.outputs.devices }}; do
+            uv run --locked python scripts/build_arduino.py "$device" \
+              --version "${{ steps.meta.outputs.version }}" \
+              --source-sha "$(git rev-parse HEAD)" \
+              --build-profile "${{ steps.meta.outputs.profile }}" \
+              $extra
+          done

@@ -19,9 +19,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import shlex
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -32,6 +32,7 @@ from fleetlib import (
     assert_flashable_secrets,
     ensure_secrets_link,
     firmware_channel,
+    generated_timestamp,
     md5_file,
     run,
     secret_values,
@@ -52,10 +53,6 @@ MQTT_PORT = 1883
 FQBN_OTA_BOARD = {
     "arduino:renesas_uno:unor4wifi": "UNOR4WIFI",
 }
-
-
-def generated_timestamp() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def arduino_device_spec(name: str) -> dict:
@@ -103,9 +100,14 @@ def write_version_header(sketch_dir: Path, version: str) -> None:
 
 
 def ensure_lzss_so() -> None:
-    if not (TOOLS_DIR / "lzss.so").exists():
+    # Match the extension lzss.py loads per-platform (.dylib on macOS, .so elsewhere),
+    # and rebuild when lzss.c is newer than the object so a stale build isn't reused.
+    ext = "dylib" if platform.system() == "Darwin" else "so"
+    so = TOOLS_DIR / f"lzss.{ext}"
+    src = TOOLS_DIR / "lzss.c"
+    if not so.exists() or so.stat().st_mtime < src.stat().st_mtime:
         cc = os.environ.get("CC", "cc")
-        run([cc, "-shared", "-fPIC", "-o", "lzss.so", "lzss.c"], cwd=TOOLS_DIR)
+        run([cc, "-shared", "-fPIC", "-o", so.name, "lzss.c"], cwd=TOOLS_DIR)
 
 
 def compile_sketch(spec: dict, build_dir: Path) -> Path:
