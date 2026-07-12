@@ -14,7 +14,7 @@ if board not in MAGIC:
     sys.exit(f"unsupported board {board}")
 
 magic = MAGIC[board].to_bytes(4, "little")
-version = bytes([0, 0, 0, 0, 0, 0, 0, 0x40])   # byte7=0x40 format flag (uncompressed)
+version = bytes([0, 0, 0, 0, 0, 0, 0, 0x40])   # byte7=0x40 = LZSS-compressed payload flag
 payload = open(ifile, "rb").read()
 complete = magic + version + payload
 crc = zlib.crc32(complete) & 0xFFFFFFFF
