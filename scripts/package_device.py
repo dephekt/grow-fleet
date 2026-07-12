@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fleetlib import (
@@ -15,14 +14,11 @@ from fleetlib import (
     esphome_version,
     firmware_artifacts,
     firmware_channel,
+    generated_timestamp,
     md5_file,
     sha256_file,
     stable_version_key,
 )
-
-
-def generated_timestamp() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def stable_firmware_tags(tags: list[str], device: str) -> list[tuple[tuple[int, int, int], str, str]]:
