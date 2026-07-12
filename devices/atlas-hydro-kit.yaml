@@ -40,7 +40,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 744d21a1bd464af921b22e40affafd69aa5893a1
+      ref: 1a668c0abca54137ed67dc78bfd564ca34110338
       path: .
     components: ["ezo_types"]
 
