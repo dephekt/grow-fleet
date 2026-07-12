@@ -89,3 +89,19 @@ devices:
     release: true
     assets: *athom_plug_assets
     # no component_dependency: this config declares no external_components
+
+# Non-ESPHome (Arduino) fleet firmware. Built/packaged/published by
+# scripts/build_arduino.py (arduino-cli -> lzss -> bin2ota -> oras), which reuses
+# the same grow-firmware-package.v1 manifest + OCI publish as the ESPHome devices,
+# so grow-app serves them identically. The ESPHome `devices:` map above is parsed
+# separately and is unaffected.
+arduino_devices:
+  spectrometer:
+    sketch: arduino/spectrometer
+    fqbn: arduino:renesas_uno:unor4wifi
+    node_id: spectrometer
+    project_name: stackdrift.spectrometer
+    package: spectrometer
+    package_owner: stackdrift-firmware
+    chip_family: UNO-R4-WIFI
+    release: true
