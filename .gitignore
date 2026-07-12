@@ -8,3 +8,11 @@
 /secrets.yaml
 /dist/
 *.log
+
+# Arduino firmware: build tree + generated (secrets/version) headers + compiled LZSS lib
+/arduino/.build/
+arduino/*/arduino_secrets.h
+arduino/*/fw_version.h
+arduino/tools/lzss.so
+arduino/tools/lzss.dylib
+arduino/tools/__pycache__/
