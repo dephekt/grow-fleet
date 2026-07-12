@@ -209,11 +209,16 @@ void loop() {
   if (sat || mx >= HI)                 { integ_ms = (integ_ms > 1) ? integ_ms / 2 : 0; }
   else if (mx < LO && integ_ms < 500)  { integ_ms = integ_ms ? (integ_ms * 3) / 2 + 1 : 2; }
 
-  // firmware self-update: once ~20 s after boot, then hourly
+  // firmware self-update: once ~20 s after boot, then hourly. checkForUpdate() is
+  // HTTP-only (it re-checks WiFi itself), so gate on WiFi — not MQTT — and only advance
+  // the flag/timestamp when it actually ran, so a slow first connect doesn't burn the
+  // first check and stall the next one for an hour.
   if ((!didFirstFwCheck && millis() > 20000) || (millis() - lastFwCheck > FW_CHECK_INTERVAL_MS)) {
-    didFirstFwCheck = true;
-    lastFwCheck = millis();
-    if (mqttClient.connected()) checkForUpdate();
+    if (WiFi.status() == WL_CONNECTED) {
+      didFirstFwCheck = true;
+      lastFwCheck = millis();
+      checkForUpdate();
+    }
   }
 
   seq++;

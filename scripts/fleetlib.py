@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -146,6 +147,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def generated_timestamp() -> str:
+    """UTC ISO-8601 timestamp (second precision, `Z` suffix) for package manifests."""
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def md5_file(path: Path) -> str:
