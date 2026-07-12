@@ -8,16 +8,13 @@ name: Arduino Firmware
 
 on:
   push:
+    # Deliberately NO `paths:` filter here. GitHub applies push path-filters to TAG
+    # pushes too, and a release tag (arduino-firmware/<device>/vX.Y.Z) points at a
+    # commit already on main — so it carries no changed paths matching this list and
+    # the stable-publish would be silently skipped. firmware.yml omits paths on push
+    # for the same reason; the pull_request trigger below keeps its filter.
     branches: [main]                     # edge publish
     tags: ["arduino-firmware/**"]        # stable publish (arduino-firmware/<device>/vX.Y.Z)
-    paths:
-      - "arduino/**"
-      - "scripts/build_arduino.py"
-      - "scripts/publish_packages.py"
-      - "scripts/fleetlib.py"
-      - "scripts/install_firmware_secrets.py"
-      - "fleet.yaml"
-      - ".github/workflows/arduino-firmware.yml"
   pull_request:
     paths:
       - "arduino/**"
@@ -44,11 +41,14 @@ jobs:
       - name: Set up arduino-cli
         uses: arduino/setup-arduino-cli@v2
       - name: Install core + libraries
+        # Pinned for reproducible builds (matches the versions the firmware was
+        # validated against). Bump deliberately; an unpinned core/lib release could
+        # silently change the compiled binary or break the build. cf. esphome:2026.5.
         run: |
           set -eu
           arduino-cli core update-index
-          arduino-cli core install arduino:renesas_uno
-          arduino-cli lib install ArduinoJson ArduinoHttpClient ArduinoMqttClient
+          arduino-cli core install arduino:renesas_uno@1.6.0
+          arduino-cli lib install ArduinoJson@7.4.3 ArduinoHttpClient@0.6.1 ArduinoMqttClient@0.1.8
 
       - name: Set up ORAS
         uses: oras-project/setup-oras@v2.0.0
@@ -61,8 +61,12 @@ jobs:
           FLEET_SECRETS_YAML_B64: ${{ secrets.FLEET_SECRETS_YAML_B64 }}
         run: |
           set -eu
-          if [ -z "${FLEET_SECRETS_YAML_B64:-}" ] || [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "::notice::Compile-only (no FLEET_SECRETS_YAML_B64, or a pull_request)"
+          # Publish only on push events — a main push (edge) or a release tag (stable).
+          # pull_request and workflow_dispatch are compile-only, so a manual dispatch
+          # from a feature branch can't push an edge package built from unmerged code
+          # (firmware.yml keeps its dispatch compile-only for the same reason).
+          if [ -z "${FLEET_SECRETS_YAML_B64:-}" ] || [ "${{ github.event_name }}" != "push" ]; then
+            echo "::notice::Compile-only (no FLEET_SECRETS_YAML_B64, or not a push event)"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
