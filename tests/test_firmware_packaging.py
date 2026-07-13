@@ -671,8 +671,8 @@ class FirmwarePackagingTests(unittest.TestCase):
         self.assertIsNotNone(atoms)
         self.assertIn("esphome-components", atoms["source"]["url"])
         self.assertRegex(atoms["source"]["ref"], r"^[0-9a-f]{40}$")
-        # feather-air-monitor declares no external_components at all.
-        self.assertIsNone(device_component_dependency(device_spec("feather-air-monitor")))
+        # irrigation-pump declares no external_components at all.
+        self.assertIsNone(device_component_dependency(device_spec("irrigation-pump")))
 
     def test_manifest_records_device_component_dependency_not_fleet_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
