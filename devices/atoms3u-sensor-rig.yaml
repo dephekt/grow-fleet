@@ -7,6 +7,7 @@
 #   M5Stack THERMAL2 (MLX90640) @ 0x32  -> m5stack_thermal2 (buzzer/RGB alarm + /thermal.jpg)
 #   M5Stack BPS     (QMP6988)  @ 0x70  -> qmp6988 (hardened, vendored)
 #   M5Stack DLIGHT (BH1750FVI) @ 0x23  -> stock bh1750
+#   7semi SHT45     (SHT4x)    @ 0x44  -> stock sht4x — canonical tent air temp/RH
 #
 # Build / flash:
 #   esphome compile devices/atoms3u-sensor-rig.yaml
@@ -150,7 +151,6 @@ mqtt:
               { "component": "sensor", "objectId": "barometric_pressure", "group": "overview", "role": "metric", "order": 60, "label": "Pressure" },
               { "component": "number", "objectId": "grow_light_brightness", "group": "grow_light", "role": "quick-control", "order": 10, "label": "Brightness" },
               { "component": "camera", "objectId": "thermal_camera", "group": "thermal_view", "role": "camera", "order": 10, "label": "Thermal Camera" },
-              { "component": "binary_sensor", "objectId": "air_sensor_offline", "group": "thresholds", "order": 5 },
               { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
               { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
               { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
@@ -434,42 +434,26 @@ sensor:
       entity_category: diagnostic
       web_server: { sorting_group_id: diagnostics, sorting_weight: 24 }
 
-  # --- Canonical tent air temp/RH: SHT45 reference on feather-air-monitor ---
-  # The SHT45 lives on the ESP32-S2 Feather (outside the tent). We subscribe to
-  # its published temp/RH and republish them 1:1 under the canonical ids the rig
-  # already consumes (VPD via scd4x_stats, temp/RH/VPD alerts via scd4x_alerts,
-  # the dashboard overview metrics).
-  #
-  # NO fallback. If the feather feed goes stale for 5 min the reading goes
-  # unavailable (NaN) rather than silently substituting the self-heated SCD41 —
-  # a wrong value from an unlabelled source is worse than a gap. We either have a
-  # valid SHT45 measurement or none.
-  - platform: mqtt_subscribe
-    name: "Temperature"
-    id: temperature_sensor
-    topic: grow/daniel-home/feather-air-monitor/sensor/temperature/state
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 2
-    filters:
-      - timeout:
-          timeout: 5min
-          value: !lambda 'return NAN;'
-    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 20 }
-  - platform: mqtt_subscribe
-    name: "Humidity"
-    id: humidity_sensor
-    topic: grow/daniel-home/feather-air-monitor/sensor/humidity/state
-    unit_of_measurement: "%"
-    device_class: humidity
-    state_class: measurement
-    accuracy_decimals: 2
-    filters:
-      - timeout:
-          timeout: 5min
-          value: !lambda 'return NAN;'
-    web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 30 }
+  # --- Canonical tent air temp/RH: 7semi SHT45 on the local Grove I2C chain ---
+  # Wired directly to Port A @ 0x44. Plain local sensor, same as the SCD41 / QMP6988
+  # / BH1750 on this bus: temperature_sensor / humidity_sensor feed scd4x_stats (VPD,
+  # daily min/max), scd4x_alerts (temp/RH/VPD alerts), and the dashboard overview.
+  # If the SHT45 stops responding it simply stops updating (stock sht4x holds the last
+  # value, like the other local sensors) — no stale-feed timeout or offline alarm,
+  # which only mattered when temp/RH were relayed over MQTT from a separate node.
+  - platform: sht4x
+    address: 0x44
+    update_interval: 10s
+    temperature:
+      name: "Temperature"
+      id: temperature_sensor
+      accuracy_decimals: 2
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 20 }
+    humidity:
+      name: "Humidity"
+      id: humidity_sensor
+      accuracy_decimals: 2
+      web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 30 }
 
   # Barometric pressure (QMP6988 / BPS unit) — vendored hardened qmp6988 component
   # (verified init + runtime self-heal + plausibility guard; replaces the stock one).
@@ -531,14 +515,6 @@ scd4x_stats:
     id: vpd_sensor
     unit_of_measurement: "kPa"
     accuracy_decimals: 2
-    # Go unavailable in lockstep with the temp/RH inputs. scd4x_stats only
-    # publishes VPD while its inputs are valid, so without this the value would
-    # freeze on the last computed number during a feather outage — a stale
-    # "wrong value" while temp/RH already read unavailable.
-    filters:
-      - timeout:
-          timeout: 5min
-          value: !lambda 'return NAN;'
     web_server: { sorting_group_id: environmental_monitoring, sorting_weight: 40 }
   daily_max_co2:
     name: "Daily Max CO2"
@@ -638,18 +614,6 @@ scd4x_alerts:
 # controls; scd4x_alerts DEPENDENCIES-requires binary_sensor). Mirrors the
 # known-good grow-monitor config.
 binary_sensor:
-  # Loud, explicit signal that the SHT45 feed is gone. scd4x_alerts guards its
-  # alerts only on has_state(), and a published NaN keeps has_state() true while
-  # every threshold comparison turns false — so an ACTIVE temp/RH alert silently
-  # clears to OFF when the feed drops (a false "all clear" during e.g. an
-  # overheat). This alarm surfaces the outage instead of letting it read as safe.
-  - platform: template
-    name: "Air Sensor Offline"
-    id: air_sensor_offline
-    device_class: problem
-    lambda: |-
-      return isnan(id(temperature_sensor).state) || isnan(id(humidity_sensor).state);
-    web_server: { sorting_group_id: environmental_alerts, sorting_weight: 5 }
   - platform: template
     name: "Dummy Template Binary Sensor"
     id: dummy_template_binary_sensor
