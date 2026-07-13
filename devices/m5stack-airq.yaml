@@ -280,7 +280,7 @@ sensor:
   # CO2 + temp/RH (SCD40). The onboard temp/RH self-heat badly on this board
   # (raw ran ~15.6°C hot, validated 2026-05-31). They are now surfaced RAW
   # (temperature_offset: 0) on purpose, to illustrate the self-heating vs the
-  # feather-air-monitor's SHT45 reference. ASC is disabled; ambient-pressure
+  # canonical SHT45 air reference (on the atoms3u rig). ASC is disabled; ambient-pressure
   # compensation is fed from the atoms3u BPS by the mqtt_subscribe relay below.
   - platform: scd4x
     id: co2_component
