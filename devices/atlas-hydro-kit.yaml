@@ -254,7 +254,9 @@ sensor:
     # command + response while a sibling may be mid-measurement. Slower polling
     # keeps the bus quiet around the EC circuit's 600ms read window.
     update_interval: 15s
-    accuracy_decimals: 3
+    accuracy_decimals: 2
+    # Two decimals (x.xx). The EZO-pH is accurate to ~±0.002 pH, but hundredths
+    # are plenty for hydro control and the thousandths digit just jitters.
     # Unfiltered (temporarily): publishing every raw reading for probe testing.
     # Restore the median(3) spike-rejection filter when done.
     power_control_switch: ph_enable
@@ -465,14 +467,22 @@ sensor:
     address: 98
     # 15s (was 5s): see the pH note — keep the shared bus quiet.
     update_interval: 15s
-    accuracy_decimals: 0
-    # ±1mV accuracy → 1mV is the meaningful resolution, so 0 decimals. Like pH,
-    # median-only preserves each real reading while dropping spikes (~45s).
+    accuracy_decimals: 1
+    # One decimal (x.x). ±1mV absolute accuracy is coarser than a tenth of a mV,
+    # but the EZO-ORP resolves 0.1mV and short-term repeatability is tighter, so
+    # the tenths digit tracks real drift once the jitter is averaged out. ORP is a
+    # noisy potential, so it gets the same chain as EC: median() de-spikes every
+    # poll, then sliding_window_moving_average means the last 4 de-spiked samples.
+    # Bounded, NaN-skipping windows only — no EMA that would bleed stale mV for
+    # ~10 min after a circuit dropout. Published cadence stays ~45s (3 × 15s).
     filters:
       - median:
           window_size: 3
+          send_every: 1
+          send_first_at: 1
+      - sliding_window_moving_average:
+          window_size: 4
           send_every: 3
-          send_first_at: 2
     power_control_switch: aux_enable
     web_server:
       sorting_group_id: overview
