@@ -325,17 +325,27 @@ sensor:
     # 15s (was 5s): see the pH note — less bus traffic around the EC circuit's
     # 600ms measurement window, which is when it has historically firmware-locked.
     update_interval: 15s
-    accuracy_decimals: 0
-    # ±2% accuracy (~±30 µS/cm) means sub-integer digits are pure noise, so we
-    # round to whole µS/cm. Median-only: it rejects spikes and, unlike an EMA,
-    # carries no memory across an outage — an EMA accumulator survives NaN
-    # (unavailable) periods untouched and then bleeds stale garbage for ~10
-    # minutes after the circuit recovers.
+    accuracy_decimals: 2
+    # Two decimals (x.xx). ±2% absolute accuracy (~±30 µS/cm) is coarser than a
+    # hundredth, but sample-to-sample repeatability is much tighter, so the sub-
+    # integer digits track a real short-term trend once we average the jitter out
+    # below.
+    #
+    # Bounded sliding windows only — deliberately NO ema/throttle_average: an EMA
+    # accumulator survives NaN (unavailable) periods untouched and then bleeds
+    # stale garbage for ~10 min after the EC circuit recovers from a lockup. Both
+    # filters here skip NaN and fully flush within their window. median() rejects
+    # single-sample spikes every poll; sliding_window_moving_average then means
+    # the last 4 de-spiked samples so the reported x.xx doesn't dance. Published
+    # cadence stays ~45s (3 × 15s), now over ~1 min of de-spiked data.
     filters:
       - median:
           window_size: 3
+          send_every: 1
+          send_first_at: 1
+      - sliding_window_moving_average:
+          window_size: 4
           send_every: 3
-          send_first_at: 2
     power_control_switch: ec_enable
     rtd_sensor: rtd_sensor
     temp_compensation_switch: ec_temp_comp_enable
