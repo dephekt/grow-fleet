@@ -629,7 +629,7 @@ number:
     internal: true
 
   # SCD41 temperature offset (°C). Only affects the diagnostic SCD41 temp/RH here
-  # (canonical temp/RH/VPD come from the SHT45 relay). ESPHome writes it at setup()
+  # (canonical temp/RH/VPD come from the local SHT45). ESPHome writes it at setup()
   # only, so a change applies on Restart; config default 0°C.
   - platform: template
     name: "SCD41 Temperature Offset"
