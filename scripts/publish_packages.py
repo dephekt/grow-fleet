@@ -12,7 +12,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-
 DEFAULT_PACKAGE_USER = "stackdrift"
 PRIVATE_PACKAGE_USER = "stackdrift-firmware"
 DEFAULT_OCI_REGISTRY = "ghcr.io"
@@ -29,7 +28,7 @@ EDGE_VERSION_RE = re.compile(r"^edge-(?P<created>\d{8}T\d{6}Z)-(?P<sha>[0-9a-f]{
 
 def authorization_header(auth_user: str, token: str, auth_scheme: str) -> str:
     if auth_scheme == "basic":
-        auth_value = base64.b64encode(f"{auth_user}:{token}".encode("utf-8")).decode("ascii")
+        auth_value = base64.b64encode(f"{auth_user}:{token}".encode()).decode("ascii")
         return f"Basic {auth_value}"
     if auth_scheme == "bearer":
         return f"Bearer {token}"
@@ -103,7 +102,9 @@ def publish_device(
         )
 
 
-def package_list_url(base_url: str, package_user: str, package: str, page: int, page_size: int) -> str:
+def package_list_url(
+    base_url: str, package_user: str, package: str, page: int, page_size: int
+) -> str:
     return (
         f"{base_url}/api/v1/packages/"
         f"{quote(package_user, safe='')}"
@@ -135,13 +136,19 @@ def list_generic_packages(
             if not auth_user:
                 raise ValueError("auth_user is required when token is provided")
             headers["Authorization"] = authorization_header(auth_user, token, auth_scheme)
-        request = Request(package_list_url(base_url, package_user, package, page, page_size), method="GET", headers=headers)
+        request = Request(
+            package_list_url(base_url, package_user, package, page, page_size),
+            method="GET",
+            headers=headers,
+        )
         with urlopen(request) as response:
             payload = json.loads(response.read().decode("utf-8"))
             link_header = response.headers.get("Link")
         if not isinstance(payload, list):
             raise ValueError("package list response must be an array")
-        packages.extend(item for item in payload if isinstance(item, dict) and item.get("name") == package)
+        packages.extend(
+            item for item in payload if isinstance(item, dict) and item.get("name") == package
+        )
 
         if link_header:
             if not has_next_page(link_header):
@@ -222,7 +229,9 @@ def prune_edge_packages(
     versions = [str(item["version"]) for item in packages if "version" in item]
     candidates = edge_cleanup_candidates(versions, keep)
     for version in candidates:
-        delete_package_version(base_url, auth_user, token, auth_scheme, package_user, package, version)
+        delete_package_version(
+            base_url, auth_user, token, auth_scheme, package_user, package, version
+        )
     return candidates
 
 
@@ -272,13 +281,16 @@ def list_oci_tags(registry: str, owner: str, package_prefix: str, package: str) 
     completed = subprocess.run(
         ["oras", "repo", "tags", repository],
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
     if completed.returncode != 0:
         return []
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip() and not line.startswith("Tags for ")]
+    return [
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if line.strip() and not line.startswith("Tags for ")
+    ]
 
 
 def github_packages_token() -> str | None:
@@ -297,7 +309,9 @@ def _github_api_request(url: str, token: str, method: str = "GET") -> Request:
     )
 
 
-def list_ghcr_package_versions(owner: str, package_name: str, token: str) -> list[dict[str, object]]:
+def list_ghcr_package_versions(
+    owner: str, package_name: str, token: str
+) -> list[dict[str, object]]:
     """List container package versions for a user-owned GHCR package.
 
     GHCR does not implement the OCI registry manifest-delete endpoint, so
@@ -322,10 +336,13 @@ def list_ghcr_package_versions(owner: str, package_name: str, token: str) -> lis
     return versions
 
 
-def delete_ghcr_package_version(owner: str, package_name: str, version_id: object, token: str) -> None:
+def delete_ghcr_package_version(
+    owner: str, package_name: str, version_id: object, token: str
+) -> None:
     url = (
         f"{GITHUB_API_BASE}/users/{quote(owner, safe='')}"
-        f"/packages/container/{quote(package_name, safe='')}/versions/{quote(str(version_id), safe='')}"
+        f"/packages/container/{quote(package_name, safe='')}"
+        f"/versions/{quote(str(version_id), safe='')}"
     )
     with urlopen(_github_api_request(url, token, method="DELETE")) as response:
         response.read()
@@ -345,7 +362,9 @@ def _version_ids_by_tag(versions: list[dict[str, object]]) -> dict[str, object]:
     return mapping
 
 
-def prune_edge_oci_packages(registry: str, owner: str, package_prefix: str, package: str, keep: int) -> list[str]:
+def prune_edge_oci_packages(
+    registry: str, owner: str, package_prefix: str, package: str, keep: int
+) -> list[str]:
     """Delete the oldest edge tags beyond ``keep`` via the GitHub Packages API.
 
     Best-effort: any failure (missing token, insufficient scope, transient API
@@ -353,27 +372,39 @@ def prune_edge_oci_packages(registry: str, owner: str, package_prefix: str, pack
     ``oras manifest delete`` approach always failed on GHCR with
     "unsupported: The operation is unsupported".
     """
-    candidates = edge_cleanup_candidates(list_oci_tags(registry, owner, package_prefix, package), keep)
+    candidates = edge_cleanup_candidates(
+        list_oci_tags(registry, owner, package_prefix, package), keep
+    )
     if not candidates:
         return []
 
     token = github_packages_token()
     if not token:
-        print(f"::warning::skipping edge prune for {package}: set GHCR_TOKEN (delete:packages) to enable pruning", flush=True)
+        print(
+            f"::warning::skipping edge prune for {package}: "
+            "set GHCR_TOKEN (delete:packages) to enable pruning",
+            flush=True,
+        )
         return []
 
     package_name = oci_package_name(package_prefix, package)
     try:
         version_ids = _version_ids_by_tag(list_ghcr_package_versions(owner, package_name, token))
     except (HTTPError, URLError) as exc:
-        print(f"::warning::skipping edge prune for {package}: cannot list package versions: {exc}", flush=True)
+        print(
+            f"::warning::skipping edge prune for {package}: cannot list package versions: {exc}",
+            flush=True,
+        )
         return []
 
     removed: list[str] = []
     for version in candidates:
         version_id = version_ids.get(version)
         if version_id is None:
-            print(f"::warning::edge prune: no package version found for {package} {version}", flush=True)
+            print(
+                f"::warning::edge prune: no package version found for {package} {version}",
+                flush=True,
+            )
             continue
         try:
             delete_ghcr_package_version(owner, package_name, version_id, token)
@@ -387,7 +418,9 @@ def prune_edge_oci_packages(registry: str, owner: str, package_prefix: str, pack
 def main() -> None:
     parser = argparse.ArgumentParser(description="Publish packaged firmware artifacts.")
     parser.add_argument("devices", nargs="+", help="Device names to publish.")
-    parser.add_argument("--dist-root", default="dist", help="Directory containing packaged artifacts.")
+    parser.add_argument(
+        "--dist-root", default="dist", help="Directory containing packaged artifacts."
+    )
     parser.add_argument(
         "--provider",
         choices=["ghcr-oci", "forgejo-generic"],
@@ -432,7 +465,9 @@ def main() -> None:
     parser.add_argument(
         "--preflight-only",
         action="store_true",
-        help="Validate package namespace access from existing manifests without uploading artifacts.",
+        help=(
+            "Validate package namespace access from existing manifests without uploading artifacts."
+        ),
     )
     parser.add_argument(
         "--prune-edge",
@@ -481,9 +516,15 @@ def main() -> None:
     auth_user = args.auth_user
     if package_token and not auth_user:
         if args.package_user != DEFAULT_PACKAGE_USER:
-            raise SystemExit("PACKAGE_AUTH_USER is required when publishing to an org package namespace")
+            raise SystemExit(
+                "PACKAGE_AUTH_USER is required when publishing to an org package namespace"
+            )
         auth_user = args.package_user
-    if package_token and args.package_user == PRIVATE_PACKAGE_USER and auth_user == args.package_user:
+    if (
+        package_token
+        and args.package_user == PRIVATE_PACKAGE_USER
+        and auth_user == args.package_user
+    ):
         raise SystemExit("PACKAGE_AUTH_USER must be the PAT-owning user, not stackdrift-firmware")
     if not auth_user:
         auth_user = args.package_user

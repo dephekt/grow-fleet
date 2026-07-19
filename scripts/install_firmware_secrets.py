@@ -26,7 +26,9 @@ def install_secrets_from_env(env_name: str, target: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Install protected ESPHome secrets for flashable firmware builds.")
+    parser = argparse.ArgumentParser(
+        description="Install protected ESPHome secrets for flashable firmware builds."
+    )
     parser.add_argument(
         "--env",
         default="FLEET_SECRETS_YAML_B64",

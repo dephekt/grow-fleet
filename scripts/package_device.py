@@ -21,7 +21,9 @@ from fleetlib import (
 )
 
 
-def stable_firmware_tags(tags: list[str], device: str) -> list[tuple[tuple[int, int, int], str, str]]:
+def stable_firmware_tags(
+    tags: list[str], device: str
+) -> list[tuple[tuple[int, int, int], str, str]]:
     prefix = f"firmware/{device}/"
     found: list[tuple[tuple[int, int, int], str, str]] = []
     for tag in tags:
@@ -94,7 +96,9 @@ def release_metadata(
         "release_summary": summary,
         "changelog": {
             "base_ref": base_ref,
-            "base_tag": base_ref if base_ref and base_ref.startswith(f"firmware/{device}/") else None,
+            "base_tag": base_ref
+            if base_ref and base_ref.startswith(f"firmware/{device}/")
+            else None,
             "base_version": base_version,
             "target_sha": source_sha,
             "commits": commits,
@@ -175,7 +179,9 @@ def package_device(
     }
 
     manifest_path = device_dist / f"{name}.manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return manifest_path
 
 
@@ -217,7 +223,10 @@ def main() -> None:
     parser.add_argument(
         "--require-flashable-secrets",
         action="store_true",
-        help="Reject packaging if devices/secrets.yaml still contains compile-only placeholder values.",
+        help=(
+            "Reject packaging if devices/secrets.yaml still contains "
+            "compile-only placeholder values."
+        ),
     )
     args = parser.parse_args()
 

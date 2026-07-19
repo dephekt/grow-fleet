@@ -34,3 +34,30 @@ jobs:
 
       - name: Run pytest
         run: uv run --locked python -m pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Run ruff check
+        run: uv run --locked ruff check
+
+      - name: Run ruff format --check
+        run: uv run --locked ruff format --check
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Run mypy
+        run: uv run --locked mypy

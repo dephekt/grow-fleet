@@ -8,8 +8,45 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.0",
     "pytest>=9.1.1",
+    "ruff>=0.15.22",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.uv]
 package = false
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# arduino/tools holds standalone, subprocess-invoked helpers (bin2ota.py and
+# lzss.py are vendored upstream Arduino OTA tooling); they are not part of the
+# importable scripts/ package and the checks workflow does not trigger on
+# arduino/**, so keep the lint/format gate scoped to our own Python.
+extend-exclude = ["arduino/tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# Line length is enforced by `ruff format`, not the linter: E501 only fires on
+# lines the formatter deliberately leaves long (long string literals, trailing
+# `# type: ignore` comments, URLs), which it cannot rewrap — flagging them is
+# noise with no autofix. Delegating length to the formatter matches the sibling
+# media-stack repo's convention.
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+# The scripts are heavily annotated and carry all the packaging/publish logic, so
+# they get the strict baseline below. tests/ is intentionally left out for now: the
+# assertions index dynamically into JSON-shaped dicts (dict[str, object]) which would
+# need per-call casts to satisfy strict indexing/optional checks — low signal for the
+# churn. ruff + pytest still cover tests; this scope can be widened later.
+files = ["scripts"]
+mypy_path = "scripts"
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+warn_return_any = true

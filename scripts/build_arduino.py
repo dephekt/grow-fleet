@@ -14,6 +14,7 @@ Pipeline:  arduino-cli compile  ->  lzss compress  ->  bin2ota wrap
 The ``.ota`` is the LZSS-compressed image the UNO R4 WiFi OTAUpdate library
 applies (proven manually; see arduino/README.md).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,12 +22,10 @@ import json
 import os
 import platform
 import shlex
-import subprocess
 from pathlib import Path
 
-import yaml
-
 import publish_packages
+import yaml
 from fleetlib import (
     ROOT,
     assert_flashable_secrets,
@@ -59,9 +58,19 @@ def arduino_device_spec(name: str) -> dict:
     data = yaml.safe_load((ROOT / "fleet.yaml").read_text(encoding="utf-8")) or {}
     devices = data.get("arduino_devices", {}) or {}
     if name not in devices:
-        raise KeyError(f"unknown arduino device: {name} (add it under arduino_devices in fleet.yaml)")
+        raise KeyError(
+            f"unknown arduino device: {name} (add it under arduino_devices in fleet.yaml)"
+        )
     spec = dict(devices[name])
-    for key in ("sketch", "fqbn", "node_id", "project_name", "package", "package_owner", "chip_family"):
+    for key in (
+        "sketch",
+        "fqbn",
+        "node_id",
+        "project_name",
+        "package",
+        "package_owner",
+        "chip_family",
+    ):
         if key not in spec:
             raise ValueError(f"arduino device {name} missing required key: {key}")
     if spec["fqbn"] not in FQBN_OTA_BOARD:
@@ -114,11 +123,17 @@ def compile_sketch(spec: dict, build_dir: Path) -> Path:
     if build_dir.exists():
         for f in build_dir.glob("*.ino.bin"):
             f.unlink()
-    run(arduino_cli() + [
-        "compile", "--fqbn", spec["fqbn"],
-        "--output-dir", str(build_dir),
-        str(ROOT / spec["sketch"]),
-    ])
+    run(
+        arduino_cli()
+        + [
+            "compile",
+            "--fqbn",
+            spec["fqbn"],
+            "--output-dir",
+            str(build_dir),
+            str(ROOT / spec["sketch"]),
+        ]
+    )
     bins = list(build_dir.glob("*.ino.bin"))
     if not bins:
         raise FileNotFoundError(f"no *.ino.bin produced in {build_dir}")
@@ -130,7 +145,10 @@ def make_ota(spec: dict, bin_path: Path, out_ota: Path) -> None:
     board = FQBN_OTA_BOARD[spec["fqbn"]]
     lzss = bin_path.with_suffix(".lzss")
     # lzss.py loads ./lzss.so relative to cwd -> run from TOOLS_DIR with absolute paths.
-    run(["python3", "lzss.py", "--encode", str(bin_path.resolve()), str(lzss.resolve())], cwd=TOOLS_DIR)
+    run(
+        ["python3", "lzss.py", "--encode", str(bin_path.resolve()), str(lzss.resolve())],
+        cwd=TOOLS_DIR,
+    )
     run(["python3", "mkota.py", board, str(lzss.resolve()), str(out_ota.resolve())], cwd=TOOLS_DIR)
 
 
@@ -171,7 +189,9 @@ def package(name: str, spec: dict, version: str, source_sha: str, build_profile:
         "sha256": {n: sha256_file(dist_dir / n) for n in names},
     }
     manifest_path = dist_dir / f"{name}.manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(f"packaged {name} {version} -> {manifest_path}")
     return manifest_path
 
@@ -181,12 +201,16 @@ def main() -> None:
     ap.add_argument("device")
     ap.add_argument("--version", required=True, help="edge-<UTC>-<sha> or vX.Y.Z")
     ap.add_argument("--source-sha", default="")
-    ap.add_argument("--build-profile", default="ci-placeholder", choices=["site-private", "ci-placeholder"])
+    ap.add_argument(
+        "--build-profile", default="ci-placeholder", choices=["site-private", "ci-placeholder"]
+    )
     ap.add_argument("--require-flashable-secrets", action="store_true")
     ap.add_argument("--publish", action="store_true")
     ap.add_argument("--oci-registry", default=os.environ.get("OCI_REGISTRY", "ghcr.io"))
     ap.add_argument("--oci-owner", default=os.environ.get("OCI_OWNER", "dephekt"))
-    ap.add_argument("--oci-package-prefix", default=os.environ.get("OCI_PACKAGE_PREFIX", "grow-fleet"))
+    ap.add_argument(
+        "--oci-package-prefix", default=os.environ.get("OCI_PACKAGE_PREFIX", "grow-fleet")
+    )
     ap.add_argument("--oci-source-url", default=os.environ.get("OCI_SOURCE_URL", ""))
     args = ap.parse_args()
 
