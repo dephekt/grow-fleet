@@ -180,10 +180,14 @@ void ensureMqtt() {
   Serial.print("MQTT connecting "); Serial.print(SECRET_MQTT_BROKER); Serial.print(':'); Serial.println(SECRET_MQTT_PORT);
   if (mqttClient.connect(SECRET_MQTT_BROKER, SECRET_MQTT_PORT)) {
     Serial.println("MQTT OK");
-    publishRetained(T_STATUS, "online");
+    // Discovery FIRST, then the birth (online) message — so grow-app knows the entities and their
+    // availability topic before it sees "online" for a fresh install (ESPHome convention). Otherwise
+    // the first "online" arrives before any entity references the status topic and the device sticks
+    // at Unavailable until it's re-sent.
     publishDiscovery();
     publishUiConfig();
     publishFirmwareConfig();
+    publishRetained(T_STATUS, "online");
   } else {
     Serial.print("MQTT FAILED err="); Serial.println(mqttClient.connectError());
     delay(1000);
