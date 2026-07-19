@@ -9,6 +9,10 @@
 /dist/
 *.log
 
+# Python: uv virtualenv + pytest cache (created by `make test` / `uv run`)
+/.venv/
+/.pytest_cache/
+
 # Arduino firmware: build tree + generated (secrets/version) headers + compiled LZSS lib
 /arduino/.build/
 arduino/*/arduino_secrets.h
