@@ -14,7 +14,9 @@ def main() -> None:
     parser.add_argument("--head", help="Head revision for git diff.")
     parser.add_argument("--path", action="append", default=[], help="Changed path to evaluate.")
     parser.add_argument("--json", action="store_true", help="Emit a JSON array.")
-    parser.add_argument("--matrix", action="store_true", help='Emit a matrix payload: {"include":[...]}')
+    parser.add_argument(
+        "--matrix", action="store_true", help='Emit a matrix payload: {"include":[...]}'
+    )
     args = parser.parse_args()
 
     paths = args.path or changed_paths(args.base, args.head)

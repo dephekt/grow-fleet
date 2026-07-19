@@ -8,13 +8,13 @@ import re
 import shlex
 import shutil
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 FLEET_PATH = ROOT / "fleet.yaml"
@@ -188,8 +188,7 @@ def capture(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | No
         cwd=cwd or ROOT,
         env=env,
         check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
     return completed.stdout.strip()
@@ -292,7 +291,10 @@ def impacted_devices(paths: Iterable[str]) -> list[str]:
         if path_strings.intersection(watched):
             impacted.add(spec.name)
 
-    if any(path.startswith("scripts/") or path.startswith(".github/workflows/") for path in path_strings):
+    if any(
+        path.startswith("scripts/") or path.startswith(".github/workflows/")
+        for path in path_strings
+    ):
         impacted.update(spec.name for spec in specs)
 
     return sorted(impacted)
@@ -302,7 +304,9 @@ def matrix_payload(devices: Iterable[str]) -> str:
     return json.dumps({"include": [{"device": device} for device in devices]})
 
 
-STABLE_VERSION_RE = re.compile(r"^v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)$")
+STABLE_VERSION_RE = re.compile(
+    r"^v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)$"
+)
 EDGE_VERSION_RE = re.compile(r"^edge-(?P<created>\d{8}T\d{6}Z)-(?P<sha>[0-9a-f]{7,40})$")
 
 
