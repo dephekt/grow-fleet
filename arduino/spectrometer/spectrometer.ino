@@ -42,6 +42,11 @@ static const char *chipFamily  = "UNO-R4-WIFI";
 static const char *T_SPECTRUM = "grow/daniel-home/spectrometer/spectrum/state";
 static const char *T_UI       = "grow/daniel-home/spectrometer/_ui/config";
 static const char *T_FW       = "grow/daniel-home/spectrometer/_firmware/config";
+// HA-style discovery (registers the device in grow-app) + availability + diagnostic sensor states.
+static const char *T_STATUS   = "grow/daniel-home/spectrometer/status";
+static const char *T_ST_INTEG = "grow/daniel-home/spectrometer/sensor/integration_time/state";
+static const char *T_ST_RSSI  = "grow/daniel-home/spectrometer/sensor/wifi_signal/state";
+static const char *T_ST_SAT   = "grow/daniel-home/spectrometer/binary_sensor/saturated/state";
 
 // grow-app (site) — serves the OTA manifest + binary over plain HTTP on the LAN.
 static const char *GROW_APP_HOST = "192.168.8.3";
@@ -131,13 +136,52 @@ void publishFirmwareConfig() {
   publishRetained(T_FW, fwbuf);
 }
 
+// Shared device block + availability for the discovery configs below. FW_VERSION is a string macro,
+// so these concatenate at compile time.
+#define SPEC_DEV  "\"device\":{\"identifiers\":[\"spectrometer\"],\"name\":\"Spectrometer\",\"manufacturer\":\"stackdrift\",\"model\":\"C12880MA\",\"sw_version\":\"" FW_VERSION "\"}"
+#define SPEC_AVTY "\"availability_topic\":\"grow/daniel-home/spectrometer/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\""
+
+// HA-style MQTT discovery so grow-app registers the spectrometer as a real device (Diagnostics +
+// Updates tabs, firmware channel control) like the ESPHome fleet. It's a "dumb" sensor, so we
+// announce a few genuine diagnostics by hand; retained under the site discovery prefix.
+void publishDiscovery() {
+  publishRetained("grow/daniel-home/_discovery/sensor/spectrometer/integration_time/config",
+    "{\"name\":\"Integration time\",\"unique_id\":\"spectrometer_integration_time\",\"object_id\":\"integration_time\","
+    "\"state_topic\":\"grow/daniel-home/spectrometer/sensor/integration_time/state\","
+    "\"unit_of_measurement\":\"\xC2\xB5s\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\",\"icon\":\"mdi:camera-timer\","
+    SPEC_AVTY "," SPEC_DEV "}");
+  publishRetained("grow/daniel-home/_discovery/sensor/spectrometer/wifi_signal/config",
+    "{\"name\":\"WiFi signal\",\"unique_id\":\"spectrometer_wifi_signal\",\"object_id\":\"wifi_signal\","
+    "\"state_topic\":\"grow/daniel-home/spectrometer/sensor/wifi_signal/state\","
+    "\"unit_of_measurement\":\"dBm\",\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",\"entity_category\":\"diagnostic\","
+    SPEC_AVTY "," SPEC_DEV "}");
+  publishRetained("grow/daniel-home/_discovery/binary_sensor/spectrometer/saturated/config",
+    "{\"name\":\"Saturated\",\"unique_id\":\"spectrometer_saturated\",\"object_id\":\"saturated\","
+    "\"state_topic\":\"grow/daniel-home/spectrometer/binary_sensor/saturated/state\","
+    "\"device_class\":\"problem\",\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"entity_category\":\"diagnostic\","
+    SPEC_AVTY "," SPEC_DEV "}");
+}
+
+void publishDiagStates(bool sat) {
+  char b[24];
+  snprintf(b, sizeof(b), "%lu", (unsigned long)integ_us_measured); publishRetained(T_ST_INTEG, b);
+  snprintf(b, sizeof(b), "%d", (int)WiFi.RSSI());                   publishRetained(T_ST_RSSI, b);
+  publishRetained(T_ST_SAT, sat ? "ON" : "OFF");
+}
+
 void ensureMqtt() {
   if (mqttClient.connected()) return;
   mqttClient.setId(nodeId);
   mqttClient.setUsernamePassword(SECRET_MQTT_USER, SECRET_MQTT_PASS);
+  // Last will: broker flips us offline (retained) if we drop, so grow-app shows the device offline.
+  mqttClient.beginWill(T_STATUS, true, 1);
+  mqttClient.print("offline");
+  mqttClient.endWill();
   Serial.print("MQTT connecting "); Serial.print(SECRET_MQTT_BROKER); Serial.print(':'); Serial.println(SECRET_MQTT_PORT);
   if (mqttClient.connect(SECRET_MQTT_BROKER, SECRET_MQTT_PORT)) {
     Serial.println("MQTT OK");
+    publishRetained(T_STATUS, "online");
+    publishDiscovery();
     publishUiConfig();
     publishFirmwareConfig();
   } else {
@@ -212,6 +256,7 @@ void loop() {
   for (int i = 0; i < SPEC_CHANNELS; i++) { uint16_t v = data[i]; if (v < mn) mn = v; if (v > mx) { mx = v; peak = i; } }
   bool sat = (mx >= ADC_FULL);
   if (mqttClient.connected()) publishSpectrum(sat);
+  if (mqttClient.connected() && seq % 8 == 0) publishDiagStates(sat);  // ~every 6 s
 
   const uint16_t HI = (uint16_t)((uint32_t)ADC_FULL * 80 / 100);
   const uint16_t LO = (uint16_t)((uint32_t)ADC_FULL * 35 / 100);
