@@ -11,7 +11,6 @@ from pathlib import Path
 
 from fleetlib import device_names, device_spec, firmware_artifacts, sha256_file
 
-
 DEFAULT_CACHE_ROOT = Path("/runner-cache/grow-fleet")
 FIRMWARE_DIR = "firmware"
 COMPLETE_FILENAME = "complete.json"
@@ -85,7 +84,7 @@ def select_devices(args: argparse.Namespace) -> list[str]:
         raise ValueError("pass --all or at least one device")
     for device in args.devices:
         device_spec(device)
-    return args.devices
+    return list(args.devices)
 
 
 def copy_atomic(source: Path, destination: Path) -> None:
@@ -187,10 +186,14 @@ def build_parser() -> argparse.ArgumentParser:
     store_parser = subparsers.add_parser("store", help="Store compiled firmware in the cache.")
     store_parser.add_argument("--sha", required=True, help="Commit SHA cache key.")
     store_parser.add_argument("--all", action="store_true", help="Store all devices.")
-    store_parser.add_argument("--release-only", action="store_true", help="Store only release devices when using --all.")
+    store_parser.add_argument(
+        "--release-only", action="store_true", help="Store only release devices when using --all."
+    )
     store_parser.add_argument("devices", nargs="*", help="Devices to store.")
 
-    restore_parser = subparsers.add_parser("restore", help="Restore compiled firmware from the cache.")
+    restore_parser = subparsers.add_parser(
+        "restore", help="Restore compiled firmware from the cache."
+    )
     restore_parser.add_argument("--sha", required=True, help="Commit SHA cache key.")
     restore_parser.add_argument(
         "--wait-seconds",
@@ -201,8 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
     restore_parser.add_argument("device", help="Device to restore.")
 
     prune_parser = subparsers.add_parser("prune", help="Prune old cached firmware.")
-    prune_parser.add_argument("--max-age-days", type=int, required=True, help="Maximum cache age in days.")
-    prune_parser.add_argument("--keep-shas", type=int, required=True, help="Minimum recent SHA dirs to keep.")
+    prune_parser.add_argument(
+        "--max-age-days", type=int, required=True, help="Maximum cache age in days."
+    )
+    prune_parser.add_argument(
+        "--keep-shas", type=int, required=True, help="Minimum recent SHA dirs to keep."
+    )
 
     return parser
 

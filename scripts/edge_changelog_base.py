@@ -16,13 +16,15 @@ from publish_packages import (
     EDGE_VERSION_RE,
     PRIVATE_PACKAGE_USER,
     authorization_header,
-    list_oci_tags,
     list_generic_packages,
+    list_oci_tags,
     oci_ref,
 )
 
 
-def edge_packages(packages: list[dict[str, object]], exclude_version: str | None = None) -> list[dict[str, object]]:
+def edge_packages(
+    packages: list[dict[str, object]], exclude_version: str | None = None
+) -> list[dict[str, object]]:
     matches = [
         package
         for package in packages
@@ -33,12 +35,16 @@ def edge_packages(packages: list[dict[str, object]], exclude_version: str | None
     return sorted(matches, key=lambda package: str(package["version"]), reverse=True)
 
 
-def latest_edge_package(packages: list[dict[str, object]], exclude_version: str | None = None) -> dict[str, object] | None:
+def latest_edge_package(
+    packages: list[dict[str, object]], exclude_version: str | None = None
+) -> dict[str, object] | None:
     matches = edge_packages(packages, exclude_version=exclude_version)
     return matches[0] if matches else None
 
 
-def package_manifest_url(base_url: str, package_user: str, package: str, version: str, manifest_filename: str) -> str:
+def package_manifest_url(
+    base_url: str, package_user: str, package: str, version: str, manifest_filename: str
+) -> str:
     return (
         f"{base_url.rstrip('/')}/api/packages/"
         f"{quote(package_user, safe='')}/generic/"
@@ -63,7 +69,11 @@ def download_manifest(
         if not auth_user:
             raise ValueError("auth_user is required when token is provided")
         headers["Authorization"] = authorization_header(auth_user, token, auth_scheme)
-    request = Request(package_manifest_url(base_url, package_user, package, version, manifest_filename), method="GET", headers=headers)
+    request = Request(
+        package_manifest_url(base_url, package_user, package, version, manifest_filename),
+        method="GET",
+        headers=headers,
+    )
     with urlopen(request) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
@@ -98,9 +108,14 @@ def download_oci_manifest(
             if matches:
                 manifest_path = matches[0]
         if not manifest_path.exists():
-            restored = sorted(str(path.relative_to(output_dir)) for path in output_dir.rglob("*") if path.is_file())
+            restored = sorted(
+                str(path.relative_to(output_dir))
+                for path in output_dir.rglob("*")
+                if path.is_file()
+            )
+            ref = oci_ref(registry, owner, package_prefix, package, version)
             raise FileNotFoundError(
-                f"missing manifest {manifest_filename} in pulled OCI artifact {oci_ref(registry, owner, package_prefix, package, version)}; "
+                f"missing manifest {manifest_filename} in pulled OCI artifact {ref}; "
                 f"restored files: {', '.join(restored) if restored else 'none'}"
             )
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -109,7 +124,9 @@ def download_oci_manifest(
     return payload
 
 
-def resolve_auth(package_user: str, explicit_auth_user: str | None) -> tuple[str | None, str | None, str]:
+def resolve_auth(
+    package_user: str, explicit_auth_user: str | None
+) -> tuple[str | None, str | None, str]:
     package_token = os.environ.get("PACKAGE_TOKEN")
     forgejo_token = os.environ.get("FORGEJO_TOKEN")
     token = package_token or forgejo_token
@@ -127,17 +144,27 @@ def resolve_auth(package_user: str, explicit_auth_user: str | None) -> tuple[str
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Print the latest published edge package as changelog base key-value lines.")
+    parser = argparse.ArgumentParser(
+        description="Print the latest published edge package as changelog base key-value lines."
+    )
     parser.add_argument("device", help="Fleet device name.")
-    parser.add_argument("--exclude-version", default=None, help="Edge version to ignore when selecting the previous package.")
+    parser.add_argument(
+        "--exclude-version",
+        default=None,
+        help="Edge version to ignore when selecting the previous package.",
+    )
     parser.add_argument(
         "--provider",
         choices=["ghcr-oci", "forgejo-generic"],
         default=os.environ.get("PACKAGE_PROVIDER", "ghcr-oci"),
         help="Artifact backend to read from.",
     )
-    parser.add_argument("--oci-registry", default=os.environ.get("OCI_REGISTRY", "ghcr.io"), help="OCI registry.")
-    parser.add_argument("--oci-owner", default=os.environ.get("OCI_OWNER", "dephekt"), help="OCI registry owner.")
+    parser.add_argument(
+        "--oci-registry", default=os.environ.get("OCI_REGISTRY", "ghcr.io"), help="OCI registry."
+    )
+    parser.add_argument(
+        "--oci-owner", default=os.environ.get("OCI_OWNER", "dephekt"), help="OCI registry owner."
+    )
     parser.add_argument(
         "--oci-package-prefix",
         default=os.environ.get("OCI_PACKAGE_PREFIX", "grow-fleet"),
@@ -158,9 +185,11 @@ def main() -> None:
 
     spec = device_spec(args.device)
     if args.provider == "ghcr-oci":
-        packages = [
+        packages: list[dict[str, object]] = [
             {"name": spec.package, "version": version}
-            for version in list_oci_tags(args.oci_registry, args.oci_owner, args.oci_package_prefix, spec.package)
+            for version in list_oci_tags(
+                args.oci_registry, args.oci_owner, args.oci_package_prefix, spec.package
+            )
         ]
         latest = latest_edge_package(packages, exclude_version=args.exclude_version)
         if not latest:

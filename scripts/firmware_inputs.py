@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from fleetlib import ROOT, device_names, iter_device_specs
-
 
 SHARED_FIRMWARE_INPUTS = {
     "scripts/compile_devices.py",
