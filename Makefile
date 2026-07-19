@@ -13,12 +13,13 @@ DEVICE ?= $(DEVICE_GOAL)
 COMPILE_ARGS := $(if $(FIRMWARE_VERSION),--firmware-version $(FIRMWARE_VERSION)) $(if $(PACKAGE_OWNER),--package-owner $(PACKAGE_OWNER))
 ESPHOME_SUBS := $(if $(FIRMWARE_VERSION),-s firmware_version $(FIRMWARE_VERSION)) $(if $(PACKAGE_OWNER),-s package_owner $(PACKAGE_OWNER))
 
-.PHONY: help list-devices build flash logs release-tag $(DEVICE_NAMES)
+.PHONY: help list-devices test build flash logs release-tag $(DEVICE_NAMES)
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make list-devices' \
+		'  make test' \
 		'  make build <device>' \
 		'  make flash <device> PORT=/dev/ttyACM0' \
 		'  make logs <device> PORT=/dev/ttyACM0' \
@@ -31,6 +32,9 @@ help:
 
 list-devices:
 	$(PYTHON) scripts/list_devices.py
+
+test:
+	$(PYTHON) -m pytest
 
 build:
 	@test -n "$(DEVICE)" || { echo "Usage: make build <device> or make build DEVICE=<device>" >&2; exit 2; }
