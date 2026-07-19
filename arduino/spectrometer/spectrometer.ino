@@ -56,6 +56,7 @@ const uint16_t ADC_FULL = (1u << ADC_BITS) - 1;
 uint16_t data[SPEC_CHANNELS];
 uint32_t seq = 0;
 uint32_t integ_ms = 8;
+uint32_t integ_us_measured = 0;   // true per-frame integration time (µs), measured in readSpectrometer()
 
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
@@ -79,12 +80,20 @@ void readSpectrometer() {
   digitalWrite(SPEC_CLK, LOW);  delayMicroseconds(d);
   digitalWrite(SPEC_CLK, HIGH); delayMicroseconds(d);
   digitalWrite(SPEC_CLK, LOW);
+  // Integration runs from the ST pulse until readout begins. MEASURE that whole window (the fixed
+  // pixel-clocking time PLUS the integ_ms delay), not just the delay: grow-app divides the counts by
+  // this to get an absolute per-µs photon rate, so it must be the true exposure. Reporting only the
+  // delay makes the rate — and thus PPFD — jump whenever auto-exposure changes integ_ms (worst at
+  // integ_ms=0, where the omitted ~170 µs of clocking is the entire exposure but reads as 0).
+  // micros() unsigned-subtracts correctly across its ~71 min wrap; our window is always well under it.
+  const uint32_t t_int_start = micros();
   digitalWrite(SPEC_ST, HIGH);  delayMicroseconds(d);
   for (int i = 0; i < 15; i++) clockTick(d);
   digitalWrite(SPEC_ST, LOW);
   for (int i = 0; i < 85; i++) clockTick(d);
   if (integ_ms) delay(integ_ms);
   clockTick(d);
+  integ_us_measured = micros() - t_int_start;
   for (int i = 0; i < SPEC_CHANNELS; i++) { data[i] = analogRead(SPEC_VIDEO); clockTick(d); }
 }
 
@@ -139,7 +148,7 @@ void ensureMqtt() {
 
 char specbuf[2600];
 void publishSpectrum(bool sat) {
-  uint32_t integ_us = integ_ms * 1000UL;
+  uint32_t integ_us = integ_us_measured;   // true exposure measured in readSpectrometer(), not just the delay
   int n = 0;
   n += snprintf(specbuf + n, sizeof(specbuf) - n,
     "{\"seq\":%lu,\"integration_us\":%lu,\"saturated\":%s,\"adc_bits\":14,\"fw\":\"%s\",\"counts\":[",
