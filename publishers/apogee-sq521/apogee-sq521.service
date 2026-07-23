@@ -1,0 +1,25 @@
+# Apogee SQ-521 SDI-12 -> MQTT publisher (runs on quantum-sensor.home.arpa).
+#
+# Install (on the Pi):
+#   sudo cp apogee-sq521.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now apogee-sq521
+#
+# Adjust User / paths below if you deploy somewhere other than /home/daniel.
+[Unit]
+Description=Apogee SQ-521 SDI-12 -> MQTT publisher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=daniel
+# Serial access needs the dialout group (member of /dev/ttyUSB0's group).
+SupplementaryGroups=dialout
+EnvironmentFile=/home/daniel/apogee-sq521/config.env
+ExecStart=/home/daniel/.venvs/sdi12/bin/python /home/daniel/apogee-sq521/apogee_publisher.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
