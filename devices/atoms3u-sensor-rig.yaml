@@ -4,7 +4,7 @@
 #
 # Hardware — all I2C on one Grove chain off the AtomS3U's Port A:
 #   M5Stack CO2L    (SCD41)    @ 0x62  -> scd4x + scd4x_stats + scd4x_alerts
-#   M5Stack THERMAL2 (MLX90640) @ 0x32  -> m5stack_thermal2 (buzzer/RGB alarm + /thermal.jpg)
+#   M5Stack Thermal (MLX90640)  @ 0x33  -> mlx90640 (raw Melexis sensor + /thermal.jpg)
 #   M5Stack BPS     (QMP6988)  @ 0x70  -> qmp6988 (hardened, vendored)
 #   M5Stack DLIGHT (BH1750FVI) @ 0x23  -> stock bh1750
 #   7semi SHT45     (SHT4x)    @ 0x44  -> stock sht4x — canonical tent air temp/RH
@@ -60,8 +60,8 @@ external_components:
       ref: 1a668c0abca54137ed67dc78bfd564ca34110338
       path: .
     components:
-      - m5stack_thermal2
-      - thermal_camera_core  # shared base AUTO_LOADed by m5stack_thermal2; git sources must list it explicitly
+      - mlx90640
+      - thermal_camera_core  # shared base AUTO_LOADed by mlx90640; git sources must list it explicitly
       - scd4x_stats
       - scd4x_alerts
       - qmp6988
@@ -167,11 +167,6 @@ mqtt:
               { "component": "number", "objectId": "vpd_low_threshold", "group": "thresholds", "order": 140 },
               { "component": "binary_sensor", "objectId": "vpd_high_alert", "group": "thresholds", "order": 150 },
               { "component": "binary_sensor", "objectId": "vpd_low_alert", "group": "thresholds", "order": 160 },
-              { "component": "number", "objectId": "thermal_alarm_high_threshold", "group": "thresholds", "order": 170 },
-              { "component": "number", "objectId": "thermal_alarm_low_threshold", "group": "thresholds", "order": 180 },
-              { "component": "binary_sensor", "objectId": "thermal_alarm", "group": "thresholds", "order": 190 },
-              { "component": "switch", "objectId": "thermal_buzzer_enabled", "group": "thresholds", "order": 200 },
-              { "component": "button", "objectId": "thermal_alarm_test", "group": "thresholds", "order": 210 },
               { "component": "sensor", "objectId": "mlx90640_min_temp", "group": "thermal", "order": 10 },
               { "component": "sensor", "objectId": "mlx90640_mean_temp", "group": "thermal", "order": 20 },
               { "component": "sensor", "objectId": "mlx90640_max_temp", "group": "thermal", "order": 30 },
@@ -296,28 +291,17 @@ web_server:
       name: "Diagnostics"
       sorting_weight: 40
 
-# ---------------- Thermal camera (M5Stack Unit Thermal2) ----------------
-# THERMAL2 = MLX90640 behind a PICO-D4 at 0x32, plus a buzzer + RGB LED. The
-# software alarm beeps the buzzer and flashes the RGB red when the monitored
-# average crosses a threshold; the buzzer can be muted from the switch below.
-m5stack_thermal2:
+# ---------------- Thermal camera (bare M5Stack Unit Thermal / MLX90640) ----------------
+# The original Thermal unit wires the MLX90640 straight to I2C at 0x33 — no PICO-D4,
+# and none of the Thermal2's buzzer / RGB LED / physical button, so the alarm engine is
+# gone. Same shared thermal_camera_core, so ROI, palette, overlay, the /thermal.jpg
+# endpoint and the temperature sensors are byte-identical to the Thermal2 build.
+mlx90640:
   id: thermal_camera
-  address: 0x32
+  address: 0x33
   refresh_rate: "16Hz"
-  noise_filter: 8
   thermal_palette: "ironblack"
   update_interval: 2000           # milliseconds (component uses a raw int)
-  status_led: true                # green healthy / blue ROI mode / flashing red alarm
-  alarm:
-    source: average               # alarm on the average temperature
-    region: active                # whole-frame, or the ROI when ROI mode is on
-    high_threshold: 32.0
-    low_threshold: 12.0
-    hysteresis: 0.5
-    buzzer_frequency: 4000
-    buzzer_volume: 96
-    beep_interval: 250            # ms on/off -> a repeating series of beeps
-    led_color: [16, 0, 0]        # red flash
   web_server:
     enable: true
     path: "/thermal.jpg"
@@ -386,28 +370,6 @@ m5stack_thermal2:
   web_overlay_enabled_control:
     name: "Thermal Overlay Enable"
     web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 75 }
-  # Alarm status + controls
-  alarm_active:
-    name: "Thermal Alarm"
-    id: thermal_alarm_active
-    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 5 }
-  button:
-    name: "Thermal Button"
-    id: thermal_button
-    web_server: { sorting_group_id: diagnostics, sorting_weight: 60 }
-  alarm_test_button:
-    name: "Thermal Alarm Test"
-    id: thermal_alarm_test
-    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 6 }
-  buzzer_enabled_control:
-    name: "Thermal Buzzer Enabled"
-    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 130 }
-  alarm_high_threshold_control:
-    name: "Thermal Alarm High Threshold"
-    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 140 }
-  alarm_low_threshold_control:
-    name: "Thermal Alarm Low Threshold"
-    web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 150 }
 
 # ---------------- Sensors ----------------
 sensor:
