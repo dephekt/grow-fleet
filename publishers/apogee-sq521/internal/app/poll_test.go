@@ -397,7 +397,12 @@ func TestADefinitiveNegativeStillRetracts(t *testing.T) {
 
 	r.pub.reset()
 	answered := newHealthySession()
-	answered.verify = nil // 0V! replies, with no coefficients
+	// 0V! replies, declaring zero coefficients. sdi12 reports that as an error
+	// wrapping ErrHeaderNoValues, never as (nil, nil) — an earlier version of
+	// this test set verify = nil, which production cannot produce, so it passed
+	// against a dead branch while the real definitive-negative path was filed as
+	// inconclusive and cal_factor was never retracted in any process lifetime.
+	answered.verify, answered.verifyErr = nil, errVerifyHeaderZero
 	r.probeAndAnnounceWith(t, t.Context(), answered, st)
 
 	config := r.discoveryTopic("sensor", calFactorObjectID)
