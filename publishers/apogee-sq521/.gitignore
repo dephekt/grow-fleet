@@ -1,0 +1,3 @@
+# `make build` output. The root .gitignore's /dist/ entry is anchored to the
+# repository root and does not reach this directory.
+/dist/

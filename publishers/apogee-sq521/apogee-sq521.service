@@ -1,0 +1,203 @@
+# Apogee SQ-521 quantum (PAR) sensor -> MQTT.
+#
+# INSTALL: follow README.md, section "Deploy". The order below is load-bearing
+# and this comment is a reminder of it, not a substitute for the runbook — the
+# smoke test, the config check and the rollback backup all live there.
+#
+#   # 0. the Python publisher uses THIS unit name. Back it up and stop it first:
+#   #    the cp is the only thing that creates what Rollback restores from, and
+#   #    the stop is what frees the SDI-12 bus for the smoke test.
+#   sudo cp /etc/systemd/system/apogee-sq521.service ~/apogee-sq521.service.python.bak
+#   sudo systemctl stop apogee-sq521
+#
+#   sudo install -m 0755 apogee-sq521-linux-arm64 /usr/local/bin/apogee-sq521
+#   sudo install -d -m 0755 /etc/apogee-sq521
+#   sudo install -m 0640 -o root -g daniel config.example.env /etc/apogee-sq521/config.env
+#   sudoedit /etc/apogee-sq521/config.env                    # MQTT_PASSWORD
+#   sudo install -m 0644 apogee-sq521.service /etc/systemd/system/apogee-sq521.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable apogee-sq521
+#
+#   # restart, NOT `start`/`enable --now`: start on an already-active unit is a
+#   # no-op, so it would leave the Python running and report success about it.
+#   sudo systemctl restart apogee-sq521
+#   sudo readlink /proc/$(systemctl show -p MainPID --value apogee-sq521)/exe
+
+[Unit]
+Description=Apogee SQ-521 quantum PAR sensor publisher
+Documentation=https://github.com/dephekt/grow-fleet/blob/main/publishers/apogee-sq521/README.md
+
+# network.target, not network-online.target. The daemon dials the broker in the
+# background and retries forever, so blocking the boot on a routable address
+# buys nothing and network-online.target routinely adds tens of seconds to it.
+After=network.target
+
+# A crash loop has to stop somewhere an operator can see it. Five starts inside
+# five minutes leaves the unit failed rather than restarting quietly for ever.
+# Note this does NOT bound the watchdog path: a wedged poll loop restarts about
+# every four minutes (see WatchdogSec below), which is slower than this window,
+# so a persistently wedging daemon keeps restarting — deliberately, because a
+# sensor that recovers on restart is worth more than a tidy failed unit.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+# The daemon sends READY=1 as soon as MQTT starts dialing — NOT after the sensor
+# opens. A unit that withheld readiness until the USB adapter enumerated would
+# sit in "activating" through exactly the outage an operator wants to see, and
+# TimeoutStartSec would eventually kill it for a fault it is designed to survive.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
+
+# WatchdogSec governs how long systemd waits between WATCHDOG=1 datagrams; the
+# daemon pings at half of it, so one lost datagram is survivable.
+#
+# 60 s is chosen so that half of it is 30 s, which is exactly the daemon's own
+# statusRefresh constant — the cadence it uses for the STATUS= line when no
+# watchdog is configured at all. The same loop sends both, so this keeps
+# `systemctl status` as fresh as the author intended it to be. (At 90 s the line
+# would be blank for the first 45 s after every start, which is the half-minute
+# an operator is most likely to be looking at it.)
+#
+# It is NOT the same clock as the daemon's own staleness tolerance, and the two
+# compose rather than compete:
+#
+#   * The daemon pings only while its poll goroutine is making progress, judged
+#     against an internal tolerance of dialBackoffMax + 2*POLL_SECONDS +
+#     cycle budget + birth budget = 2m11s at defaults. That tolerance covers a
+#     dead sensor, a 30 s dial backoff and a slow broker, because none of those
+#     should ever provoke a restart — restarting re-enumerates the USB adapter,
+#     which is the thrash the watchdog exists to prevent, not to cause.
+#   * When the poll goroutine really has parked (a wedged read, a deadlock, a
+#     panic in a helper) the daemon stops pinging, and 60 s later systemd sends
+#     WatchdogSignal — SIGABRT by default, which Go handles by dumping every
+#     goroutine's stack into the journal before dying. That dump is the point.
+#
+# Worst case from "the loop parks" to "systemd restarts us" is therefore about
+# 2m11s + 30 s + 60 s ≈ 3.5 minutes. Changing the daemon's tolerance is a
+# build-time change, not a unit-file one.
+WatchdogSec=60s
+
+# A stop drains the retained "offline", disconnects and flushes the DLI state,
+# all bounded by SHUTDOWN_TIMEOUT (3 s by default). 20 s is generous headroom
+# without leaving `systemctl stop` hanging for the default 90 s if it wedges.
+TimeoutStopSec=20
+
+Restart=on-failure
+RestartSec=5s
+# 78 is EX_CONFIG: the environment is wrong and no amount of restarting will fix
+# it. Without this a typo in config.env produces a silent restart loop; with it
+# the unit fails once, loudly, with the aggregated validation errors in the
+# journal.
+#
+# 75 (EX_TEMPFAIL, another copy of this daemon already holds the node's instance
+# lock) is deliberately NOT listed: it really is temporary — the moment the other
+# copy exits, a restart succeeds — and StartLimitBurst above bounds the loop
+# meanwhile. Note that guard only recognises this binary; it says nothing about
+# the Python publisher, which must be stopped before this unit is started.
+RestartPreventExitStatus=78
+
+User=daniel
+# The tty is root:dialout 0660.
+SupplementaryGroups=dialout
+
+ExecStart=/usr/local/bin/apogee-sq521
+
+# Not "-/etc/...": a missing config file must be a hard start failure. Falling
+# back to the built-in defaults would mean an empty MQTT_PASSWORD, and while the
+# daemon refuses to start on that anyway (exit 78), "the file is not there" is a
+# better message than "the password is empty".
+EnvironmentFile=/etc/apogee-sq521/config.env
+
+# /var/lib/apogee-sq521, exported to the daemon as $STATE_DIRECTORY. It holds
+# the timezone override pushed by grow-app's reconciler and the day's DLI
+# accumulator; without it both reset on every restart, which the daemon logs
+# once at startup rather than treating as an error.
+StateDirectory=apogee-sq521
+StateDirectoryMode=0750
+
+# --- Hardening -------------------------------------------------------------
+#
+# All of this is newly possible because the daemon is a single static binary:
+# there is no interpreter to find, no venv to import from, and no site-packages
+# tree anywhere on the filesystem. The Python publisher this replaces could not
+# have had ProtectHome=yes at all — its config and its virtualenv both lived
+# under /home/daniel.
+#
+# Every directive below was checked against what the daemon actually does: it
+# needs the tty, an abstract unix socket, the notify socket, and its state
+# directory. Nothing else.
+#
+# `make smoke` (and the equivalent systemd-run block in README.md, step 5) runs
+# --once under a COPY of this block, so that a smoke test cannot pass under a
+# weaker sandbox than the service then fails under. It is a copy, not a
+# derivation: add or change a directive here and change it there too.
+
+NoNewPrivileges=yes
+
+# The whole filesystem read-only except /dev, /proc and /sys (which the three
+# Protect* directives below cover). StateDirectory= is exempted automatically,
+# so /var/lib/apogee-sq521 stays writable — that is the only path the daemon
+# writes to.
+ProtectSystem=strict
+# Safe only because config lives in /etc/apogee-sq521 and state in /var/lib.
+# Moving either back under /home/daniel silently breaks the unit.
+ProtectHome=yes
+PrivateTmp=yes
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# The daemon runs unprivileged and needs no capability at any point.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# AF_INET/AF_INET6 for the broker (and for DNS, if MQTT_HOST is ever a name).
+# AF_UNIX for three things: the sd_notify datagram socket, and the abstract
+# socket @apogee-sq521-<node> that is the primary single-instance guard.
+# Verified with strace against both an IP-literal and a hostname broker: this
+# binary opens AF_INET and AF_UNIX sockets and nothing else. In particular the
+# pure-Go resolver (CGO_ENABLED=0) never touches AF_NETLINK.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Deliberately absent: PrivateNetwork=. The instance guard is an abstract unix
+# socket, and the abstract namespace is per network namespace — a private one
+# would let a second copy bind the same name and fight over the SDI-12 bus.
+#
+# Also deliberately absent: PrivateDevices=. It would replace /dev with a
+# private tree of pseudo-devices only, and the tty would simply not be there.
+#
+# Also deliberately absent: SystemCallFilter=@system-service. It is very likely
+# fine for a static Go binary, but it could not be exercised against the real
+# unit from a workstation, and an unverified seccomp filter turns a missing
+# syscall into a SIGSYS on the Pi at 3 a.m. Add it once it has been run under
+# the real unit for a day.
+
+# Denies every device node except the standard pseudo-devices (/dev/null,
+# /dev/urandom, /dev/tty, ...) plus USB serial. A single DeviceAllow= is enough
+# to flip the default DevicePolicy=auto into closed behaviour.
+#
+# CAVEAT worth knowing before you debug an EPERM: systemd resolves "char-ttyUSB"
+# against /proc/devices when the unit STARTS. If ftdi_sio has never been loaded
+# — a fresh Pi with the adapter unplugged — the name is absent, systemd skips
+# the rule, and the daemon is denied the tty when the adapter is finally plugged
+# in. Check with `grep ttyUSB /proc/devices`; the durable fix is to have the
+# adapter present at boot (udev autoloads ftdi_sio) or
+# `echo ftdi_sio | sudo tee /etc/modules-load.d/ftdi_sio.conf`.
+DeviceAllow=char-ttyUSB rw
+
+# A blast-radius cap, not a tuning knob. Measured RSS under systemd is ~4 MB
+# peak, so this is roughly sixteen times headroom; if the daemon ever reaches it
+# something is badly wrong and a clean OOM kill plus restart beats a Pi that
+# starts swapping its SD card.
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

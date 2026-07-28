@@ -36,14 +36,14 @@ from package_device import (  # noqa: E402
     release_metadata,
 )
 from publish_packages import (  # noqa: E402
-    OCI_ARTIFACT_TYPE,
-    OCI_MANIFEST_MEDIA_TYPE,
+    OCI_FIRMWARE_ARTIFACT_TYPE,
+    OCI_FIRMWARE_MANIFEST_MEDIA_TYPE,
     edge_cleanup_candidates,
     list_generic_packages,
     oci_package_name,
     oci_ref,
     prune_edge_oci_packages,
-    publish_device_oci,
+    publish_artifact_oci,
 )
 
 
@@ -317,7 +317,7 @@ class FirmwarePackagingTests(unittest.TestCase):
             "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
         )
 
-    def test_publish_device_oci_pushes_manifest_and_artifacts_without_source_annotation(
+    def test_publish_artifact_oci_pushes_manifest_and_artifacts_without_source_annotation(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -343,7 +343,7 @@ class FirmwarePackagingTests(unittest.TestCase):
             )
 
             with mock.patch("publish_packages.subprocess.run") as run:
-                publish_device_oci(
+                publish_artifact_oci(
                     root,
                     "atoms3u-sensor-rig",
                     "ghcr.io",
@@ -357,16 +357,16 @@ class FirmwarePackagingTests(unittest.TestCase):
                 "push",
                 "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
                 "--artifact-type",
-                OCI_ARTIFACT_TYPE,
+                OCI_FIRMWARE_ARTIFACT_TYPE,
                 "atoms3u-sensor-rig.ota.bin:application/octet-stream",
                 "atoms3u-sensor-rig.factory.bin:application/octet-stream",
-                f"atoms3u-sensor-rig.manifest.json:{OCI_MANIFEST_MEDIA_TYPE}",
+                f"atoms3u-sensor-rig.manifest.json:{OCI_FIRMWARE_MANIFEST_MEDIA_TYPE}",
             ],
             check=True,
             cwd=device_dir,
         )
 
-    def test_publish_device_oci_can_attach_source_annotation_when_explicit(self) -> None:
+    def test_publish_artifact_oci_can_attach_source_annotation_when_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             device_dir = root / "atoms3u-sensor-rig"
@@ -390,7 +390,7 @@ class FirmwarePackagingTests(unittest.TestCase):
             )
 
             with mock.patch("publish_packages.subprocess.run") as run:
-                publish_device_oci(
+                publish_artifact_oci(
                     root,
                     "atoms3u-sensor-rig",
                     "ghcr.io",
@@ -405,18 +405,18 @@ class FirmwarePackagingTests(unittest.TestCase):
                 "push",
                 "ghcr.io/dephekt/grow-fleet-atoms3u-sensor-rig:edge-20260620T190102Z-bbbbbbbbbbbb",
                 "--artifact-type",
-                OCI_ARTIFACT_TYPE,
+                OCI_FIRMWARE_ARTIFACT_TYPE,
                 "--annotation",
                 "org.opencontainers.image.source=https://github.com/dephekt/grow-fleet",
                 "atoms3u-sensor-rig.ota.bin:application/octet-stream",
                 "atoms3u-sensor-rig.factory.bin:application/octet-stream",
-                f"atoms3u-sensor-rig.manifest.json:{OCI_MANIFEST_MEDIA_TYPE}",
+                f"atoms3u-sensor-rig.manifest.json:{OCI_FIRMWARE_MANIFEST_MEDIA_TYPE}",
             ],
             check=True,
             cwd=device_dir,
         )
 
-    def test_publish_device_oci_rejects_non_flashable_manifest(self) -> None:
+    def test_publish_artifact_oci_rejects_non_flashable_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             device_dir = root / "atoms3u-sensor-rig"
@@ -437,7 +437,7 @@ class FirmwarePackagingTests(unittest.TestCase):
                 self.assertRaises(ValueError),
                 mock.patch("publish_packages.subprocess.run") as run,
             ):
-                publish_device_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet")
+                publish_artifact_oci(root, "atoms3u-sensor-rig", "ghcr.io", "dephekt", "grow-fleet")
 
         run.assert_not_called()
 

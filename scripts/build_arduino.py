@@ -3,7 +3,7 @@
 
 Parallel to compile_devices.py + package_device.py + publish_packages.py for
 devices registered under ``arduino_devices:`` in fleet.yaml. Reuses fleetlib's
-digest/version helpers and ``publish_packages.publish_device_oci`` so the
+digest/version helpers and ``publish_packages.publish_artifact_oci`` so the
 published OCI artifact is byte-compatible with the ESPHome devices' package
 schema (``grow-firmware-package.v1``) and grow-app serves it unchanged.
 
@@ -222,7 +222,7 @@ def main() -> None:
     package(args.device, spec, args.version, args.source_sha, args.build_profile)
 
     if args.publish:
-        publish_packages.publish_device_oci(
+        publish_packages.publish_artifact_oci(
             DIST_ROOT,
             args.device,
             args.oci_registry,
