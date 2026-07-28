@@ -63,13 +63,29 @@ func TestAuxDiscoveryPayloadGolden(t *testing.T) {
 				`"suggested_display_precision":1,"icon":"mdi:sun-wireless"}`,
 		},
 		{
+			// No entity_category, and that absence is the contract: grow-app's
+			// recorder skips diagnostics, so a category here would stop the
+			// uncredited-time figure from ever being stored beside the DLI it
+			// qualifies. See TestAuxCategoriesMatchWhatGrowAppRequires.
 			"dli_gap",
 			`{"~":"grow/daniel-home/quantum-sensor","name":"DLI uncredited time","object_id":"dli_gap",` +
 				`"unique_id":"quantum_sensor_dli_gap","state_topic":"~/sensor/dli_gap/state",` +
 				`"availability_topic":"~/status","device":` + auxTestDeviceJSON +
 				`,"unit_of_measurement":"min","state_class":"total_increasing",` +
-				`"suggested_display_precision":1,"entity_category":"diagnostic",` +
-				`"icon":"mdi:timer-alert-outline"}`,
+				`"suggested_display_precision":1,"icon":"mdi:timer-alert-outline"}`,
+		},
+		{
+			// The one row where the category has to be present. This unit is
+			// byte-identical to the live ppfd entity's, so entity_category is
+			// the only thing in this payload that stops grow-app's µmol-unit
+			// fallback from resolving the day's peak as the canopy reading.
+			"peak_ppfd",
+			`{"~":"grow/daniel-home/quantum-sensor","name":"Peak PPFD today","object_id":"peak_ppfd",` +
+				`"unique_id":"quantum_sensor_peak_ppfd","state_topic":"~/sensor/peak_ppfd/state",` +
+				`"availability_topic":"~/status","device":` + auxTestDeviceJSON +
+				`,"unit_of_measurement":"` + auxTestPPFDUnit + `","state_class":"total_increasing",` +
+				`"suggested_display_precision":0,"entity_category":"diagnostic",` +
+				`"icon":"mdi:white-balance-sunny"}`,
 		},
 	}
 
@@ -285,5 +301,56 @@ func TestPeakPPFDCarriesTheConfiguredUnit(t *testing.T) {
 		if x.ObjectID == "peak_ppfd" && x.Unit != "umol/m2/s" {
 			t.Errorf("peak_ppfd unit = %q, want the configured PPFD unit", x.Unit)
 		}
+	}
+}
+
+// The categories are a wire contract with grow-app, not presentation, and each
+// one is load-bearing in the opposite direction from the other. Asserted by
+// name here rather than left to the golden JSON: a golden test records whatever
+// the table produces, so it pins the output without ever stating the
+// requirement — which is exactly how both of these shipped inverted.
+func TestAuxCategoriesMatchWhatGrowAppRequires(t *testing.T) {
+	for _, tc := range []struct {
+		objectID string
+		category string
+		why      string
+	}{
+		{
+			objectID: "peak_ppfd", category: "diagnostic",
+			why: "it carries the same µmol unit as the live ppfd, and grow-app's isQuantumPpfd " +
+				"falls back to that unit; without the category the peak is a candidate for " +
+				"'the canopy PAR sensor' and can be anchored as one",
+		},
+		{
+			objectID: "dli_gap", category: "",
+			why: "grow-app's recorder drops diagnostic entities, and an uncredited-time figure " +
+				"that is not stored beside the DLI it qualifies cannot be reconstructed later",
+		},
+		{
+			objectID: "dli", category: "",
+			why: "the measured daily total is the point of the whole feature; it has to be historised",
+		},
+		{
+			objectID: "dli_yesterday", category: "",
+			why: "same series as dli, one day back",
+		},
+		{
+			objectID: "photoperiod", category: "",
+			why: "measured lit hours; the counterpart to the planned photoperiod grow-app compares against",
+		},
+	} {
+		t.Run(tc.objectID, func(t *testing.T) {
+			x := auxByObjectID(t, tc.objectID)
+			if x.Category != tc.category {
+				got, want := x.Category, tc.category
+				if got == "" {
+					got = "(none)"
+				}
+				if want == "" {
+					want = "(none)"
+				}
+				t.Errorf("%s category = %s, want %s\n  because: %s", tc.objectID, got, want, tc.why)
+			}
+		})
 	}
 }
