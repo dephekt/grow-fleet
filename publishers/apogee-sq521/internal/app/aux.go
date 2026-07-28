@@ -142,10 +142,21 @@ func auxTable(ppfdUnit string) []auxEntity {
 			value:            func(r dli.Reading) float64 { return r.PhotoperiodHours },
 		},
 		{
-			ObjectID:         "peak_ppfd",
-			Name:             "Peak PPFD today",
-			Component:        "sensor",
-			Unit:             ppfdUnit,
+			ObjectID:  "peak_ppfd",
+			Name:      "Peak PPFD today",
+			Component: "sensor",
+			Unit:      ppfdUnit,
+			// Diagnostic is load-bearing, not presentation. grow-app's
+			// isQuantumPpfd falls back to a µmol-unit substring when the object
+			// id is not exactly "ppfd", and this row carries the SAME unit as
+			// the live reading — so without the category it is a candidate for
+			// "the canopy PAR sensor" and can be anchored as one. The category
+			// is what makes it invisible to that resolver.
+			//
+			// The cost is that the recorder skips diagnostics, so this is not
+			// historised. That is fine and not a loss: it is max() over the
+			// ppfd series, which is recorded at full rate.
+			Category:         "diagnostic",
 			StateClass:       "total_increasing",
 			Icon:             "mdi:white-balance-sunny",
 			DisplayPrecision: precision(0),
@@ -157,13 +168,18 @@ func auxTable(ppfdUnit string) []auxEntity {
 			// uncredited because samples were missing. A non-zero value means
 			// the DLI above under-reports by an unknown amount, which is the
 			// one thing a grower needs to know before trusting it.
-			ObjectID:         "dli_gap",
-			Name:             "DLI uncredited time",
-			Component:        "sensor",
-			Unit:             "min",
-			StateClass:       "total_increasing",
-			Icon:             "mdi:timer-alert-outline",
-			Category:         "diagnostic",
+			ObjectID:   "dli_gap",
+			Name:       "DLI uncredited time",
+			Component:  "sensor",
+			Unit:       "min",
+			StateClass: "total_increasing",
+			Icon:       "mdi:timer-alert-outline",
+			// Deliberately NOT diagnostic: grow-app's recorder drops diagnostic
+			// entities, and this number's whole job is to be stored beside the
+			// DLI it qualifies. 42 mol with 0 minutes missing and 42 mol with 90
+			// minutes missing are different claims, and the difference is only
+			// recoverable if both were written at the time — the retained MQTT
+			// value is last-write-only and cannot be reconstructed afterwards.
 			DisplayPrecision: precision(1),
 			Precision:        2,
 			value:            func(r dli.Reading) float64 { return r.GapMinutes },
