@@ -416,9 +416,16 @@ type fakePublisher struct {
 	upFns     []func()
 	subs      map[string]func(string, []byte)
 	failure   error
+	startErr  error
 	started   bool
 	stopTopic string
 	stopped   bool
+
+	// failOn decides per topic, which is what lets a test fail one publish of a
+	// pair and leave the other working. App.retract publishes two topics per
+	// entity and only one of them is idempotent to repeat, so "which half
+	// failed" is the whole question there.
+	failOn func(topic string) error
 
 	// onPublish runs before each publish is recorded, outside the publisher's
 	// own lock, so a test can make a publish cost wall time.
@@ -435,6 +442,9 @@ func newFakePublisher() *fakePublisher {
 func (p *fakePublisher) Start(context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.startErr != nil {
+		return p.startErr
+	}
 	p.started = true
 	return nil
 }
@@ -456,6 +466,11 @@ func (p *fakePublisher) PublishRetained(ctx context.Context, topic string, paylo
 	defer p.mu.Unlock()
 	if p.failure != nil {
 		return p.failure
+	}
+	if p.failOn != nil {
+		if err := p.failOn(topic); err != nil {
+			return err
+		}
 	}
 	p.msgs = append(p.msgs, pubMsg{topic: topic, payload: string(payload), fromPoller: onPoller(ctx)})
 	return nil
@@ -508,6 +523,13 @@ func (p *fakePublisher) fail(err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.failure = err
+}
+
+// failWhen installs a per-topic failure predicate. nil clears it.
+func (p *fakePublisher) failWhen(fn func(topic string) error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.failOn = fn
 }
 
 func (p *fakePublisher) observed() []pubMsg {

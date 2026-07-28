@@ -246,11 +246,20 @@ func (a *App) retract(ctx context.Context, eligible, unresolved map[string]bool)
 			// be retained on the broker.
 			continue
 		}
+		// The state clear has to succeed before the retraction is recorded, and
+		// for the same reason the config publish does: the guard above skips an
+		// entity whose retained payload is already known to be "", so recording
+		// first would make a failed state clear permanent. The stale reading
+		// would then sit on the state topic for a future config to inherit —
+		// exactly what clearing it is for. Re-publishing the (empty) config on
+		// the next birth is the cheap half of the pair to repeat.
+		if err := a.publishState(ctx, ref.component, ref.objectID, "", true); err != nil {
+			continue
+		}
 		a.mu.Lock()
 		a.retained[ref.objectID] = ""
 		a.mu.Unlock()
 
-		a.publishState(ctx, ref.component, ref.objectID, "", true)
 		a.log.Info("retracted a retained discovery config",
 			"object_id", ref.objectID, "topic", topic,
 			"note", "the entity is not eligible on this unit; a previous process or port session may have announced it")
@@ -435,17 +444,23 @@ func (a *App) setDegraded(degraded bool) {
 //
 // changeOnly suppresses a republish of an identical payload. It is used for the
 // values that do not move on a schedule of their own; see publishReadings.
-func (a *App) publishState(ctx context.Context, component, objectID, payload string, changeOnly bool) {
+//
+// It reports whether the broker holds the payload afterwards — nil for both a
+// successful publish and a suppressed no-op, since in either case the value is
+// already there. Most callers ignore it because the next cycle republishes
+// anyway; App.retract is the one that cannot, because it records a decision
+// that suppresses all future attempts.
+func (a *App) publishState(ctx context.Context, component, objectID, payload string, changeOnly bool) error {
 	a.mu.Lock()
 	last, seen := a.lastValues[objectID]
 	a.mu.Unlock()
 	if changeOnly && seen && last == payload {
-		return
+		return nil
 	}
 
 	topic := a.topics.State(component, objectID)
 	if err := a.publish(ctx, topic, []byte(payload)); err != nil {
-		return
+		return err
 	}
 
 	a.mu.Lock()
@@ -456,6 +471,7 @@ func (a *App) publishState(ctx context.Context, component, objectID, payload str
 		a.lastReadingAt = a.clock.Now()
 	}
 	a.mu.Unlock()
+	return nil
 }
 
 // publish sends one retained QoS 1 message under a bounded budget.

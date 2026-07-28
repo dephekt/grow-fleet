@@ -454,6 +454,59 @@ func TestRetractionAlsoClearsTheStateTopic(t *testing.T) {
 	}
 }
 
+// The pair retract publishes is not atomic, and the retraction is recorded once
+// for the life of the process — so it has to be recorded only when BOTH halves
+// have landed. Recording after the config clear alone makes a failed state
+// clear permanent: every later birth short-circuits on "already retracted", and
+// the last reading stays retained on a state topic whose config is gone, for a
+// future config on that topic to silently inherit.
+func TestARetractionIsNotRecordedUntilTheStateTopicIsCleared(t *testing.T) {
+	r := newRig(t)
+	session := newHealthySession()
+	r.probeAndAnnounce(t, t.Context(), session)
+	r.cycle(t.Context(), session, &pollState{seen: map[string]int{}})
+
+	tiltState := r.stateTopic("sensor", "tilt")
+	tiltConfig := r.discoveryTopic("sensor", "tilt")
+	if got, _ := r.pub.last(tiltState); got != "1.20" {
+		t.Fatalf("tilt state = %q, want a reading for the retraction to clear", got)
+	}
+
+	// The config clear lands; the state clear does not. A single publish
+	// failing out of a pair is the ordinary shape of a broker going away
+	// mid-sequence, not a contrived one.
+	down := errors.New("connection with the MQTT server is currently down")
+	r.pub.failWhen(func(topic string) error {
+		if topic == tiltState {
+			return down
+		}
+		return nil
+	})
+	r.retire("tilt")
+	r.publishBirth(t.Context(), birthLocal)
+
+	if got, _ := r.pub.last(tiltConfig); got != "" {
+		t.Fatalf("tilt config = %q, want the half that succeeds to have succeeded", got)
+	}
+	if payload, recorded := r.retainedFor("tilt"); recorded && payload == "" {
+		t.Fatal("the retraction was recorded while the stale reading was still retained on the state topic; no later birth will clear it")
+	}
+
+	// With the link healthy the next birth finishes the pair. Republishing the
+	// (already empty) config is the cheap half to repeat.
+	r.pub.failWhen(nil)
+	r.pub.reset()
+	r.publishBirth(t.Context(), birthLocal)
+
+	if got, ok := r.pub.last(tiltState); !ok || got != "" {
+		t.Errorf("tilt state on retry = %q (published=%v), want the empty payload", got, ok)
+	}
+	if payload, recorded := r.retainedFor("tilt"); !recorded || payload != "" {
+		t.Errorf("retained[tilt] = %q (recorded=%v), want the retraction recorded once both halves landed",
+			payload, recorded)
+	}
+}
+
 // The birth must survive being run twice concurrently — the poller starts one
 // when the probe completes and a reconnection can start another at the same
 // instant — without interleaving two sequences.

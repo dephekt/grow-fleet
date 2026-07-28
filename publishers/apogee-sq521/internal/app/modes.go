@@ -234,6 +234,17 @@ func (a *App) once(ctx context.Context, w io.Writer) error {
 	}
 
 	if mr.ok == 0 {
+		if mr.first == nil {
+			// ok == 0 with no error means no transaction was attempted, which
+			// takes an empty working set. Unreachable today and deliberately
+			// not tested: ppfd is not Optional, so entities.Eligible keeps it in
+			// the set whatever the probe finds. The guard is here because the
+			// only thing making it unreachable is a property of the table, and a
+			// table edit that made every polled row Optional would otherwise
+			// print "%!w(<nil>)" — %w's rendering of a nil error — in the first
+			// output an operator ever reads from this binary.
+			return fmt.Errorf("%w: the probe left no measurement to run", ErrDeviceUnavailable)
+		}
 		return fmt.Errorf("%w: no measurement produced a value: %w", ErrDeviceUnavailable, mr.first)
 	}
 	return nil

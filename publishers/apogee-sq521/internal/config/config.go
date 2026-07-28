@@ -272,9 +272,18 @@ func Load(getenv func(string) string) (Config, error) {
 			envSDI12Address, l.raw(envSDI12Address, defaultSDI12Address))
 	}
 
-	if c.PPFDUnit == "" {
+	switch {
+	case c.PPFDUnit == "":
 		l.fail("%s %q: must not be empty (it is published as unit_of_measurement and stored as an InfluxDB tag)",
 			envPPFDUnit, l.raw(envPPFDUnit, defaultPPFDUnit))
+	case containsControl(c.PPFDUnit):
+		// The same guard NodeID and TopicPrefix get, and for the same reasons:
+		// the unit is an InfluxDB tag value, and it is interpolated into the
+		// sd_notify STATUS= line, whose payload is newline-separated KEY=VALUE
+		// assignments. sdnotify folds CR/LF on the way out, but a value that only
+		// survives because a consumer sanitises it is one consumer away from
+		// being a problem, and none of this is ever intentional in a unit string.
+		l.fail("%s %q: must not contain control characters", envPPFDUnit, c.PPFDUnit)
 	}
 
 	// Only emptiness is checked. The device node is deliberately NOT stat'ed:
