@@ -403,6 +403,23 @@ func (a *App) probe(ctx context.Context, s Session, st *pollState) probeResult {
 	cancel()
 	a.beat()
 	switch {
+	case errors.Is(err, sdi12.ErrHeaderNoValues):
+		// Answered, and the answer is "there is no coefficient". Definitive, so
+		// cal_factor is genuinely ineligible and its retained config is cleared.
+		//
+		// This case has to precede err != nil. Verify reports a zero-count
+		// header as an *error* (see step 5 of sdi12.Client.transaction), so a
+		// definitive negative arrives here with err non-nil; filed under the
+		// clause below it would be marked inconclusive, and since a transient
+		// failure must never retract an established entity, cal_factor would
+		// then never be retracted in any process lifetime — while the journal
+		// claimed the read had "failed" for a sensor that answered perfectly
+		// well. That is the same definitive-vs-inconclusive distinction
+		// probeCapabilities draws, and it is drawn the same way there.
+		if st.report("verify", "empty") {
+			a.log.Warn("calibration read (0V!) returned no coefficients; cal_factor will not be announced",
+				"command", a.cfg.SDI12Address+"V!", "error", err)
+		}
 	case err != nil:
 		res.inconclusive[calFactorObjectID] = true
 		if ctx.Err() == nil && st.report("verify", "failed") {
@@ -410,11 +427,13 @@ func (a *App) probe(ctx context.Context, s Session, st *pollState) probeResult {
 				"command", a.cfg.SDI12Address+"V!", "error", err)
 		}
 	case len(cal) == 0:
-		// Answered, and the answer is "there is no coefficient". Definitive, so
-		// cal_factor is genuinely ineligible and its config is retracted.
-		if st.report("verify", "empty") {
-			a.log.Warn("calibration read (0V!) returned no coefficients; cal_factor will not be announced")
-		}
+		// Unreachable today — sdi12 turns an empty collection into ErrNoValues
+		// rather than a nil error — but default indexes cal[0], so this stays as
+		// a guard: if that contract ever loosens the cost should be a missing
+		// entity, not a panic in the poll goroutine.
+		res.inconclusive[calFactorObjectID] = true
+		a.log.Warn("calibration read (0V!) returned nothing without reporting an error; treating as inconclusive",
+			"command", a.cfg.SDI12Address+"V!")
 	default:
 		// Formatted through the table's own row so the %.6g the Python used is
 		// stated in exactly one place. entities.Format panics on an unset

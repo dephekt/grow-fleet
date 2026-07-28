@@ -765,6 +765,13 @@ var (
 	// Both ErrHeaderNoValues paths, exactly as sdi12 produces them.
 	errHeaderZero = fmt.Errorf("sdi12: 0M4!: measurement reports 0 values: %w: %w",
 		sdi12.ErrHeaderNoValues, sdi12.ErrNoValues)
+	// The 0V! shape of the same thing. It needs its own value because a
+	// definitive "I have no coefficient" is the one answer that must retract
+	// cal_factor, and Verify reports it as an error rather than as (nil, nil) —
+	// a fake that returned (nil, nil) would exercise a branch production cannot
+	// reach and leave the real one untested, which is exactly what happened.
+	errVerifyHeaderZero = fmt.Errorf("sdi12: 0V!: measurement reports 0 values: %w: %w",
+		sdi12.ErrHeaderNoValues, sdi12.ErrNoValues)
 	errDataMissing = wrapped(sdi12.ErrNoValues, "0D0!: data response carried no values")
 )
 
