@@ -160,8 +160,35 @@ func TestRunReportsTeardownFailures(t *testing.T) {
 	})
 	cancel()
 
-	if err := <-runDone; !errors.Is(err, boom) {
+	err := <-runDone
+	if !errors.Is(err, boom) {
 		t.Errorf("Run = %v, want it to report the flush failure", err)
+	}
+	// The other half of the classification. cmd/apogee-sq521 exits 0 on a
+	// teardown failure and non-zero on a start failure, so a fix that marked
+	// every Run error ErrStartup would make a `systemctl stop` taken while the
+	// broker was down mark the unit failed.
+	if errors.Is(err, ErrStartup) {
+		t.Errorf("Run = %v, want a teardown failure NOT classified as a start failure", err)
+	}
+}
+
+// The mirror of the test above, and the reason the two need telling apart at
+// all: a start failure and a teardown failure arrive through the same return
+// value, and cmd/apogee-sq521 gives them opposite exit codes. Without the
+// classification a daemon that could not bring MQTT up logged a warning about
+// an untidy teardown and exited 0 — so systemd's Restart=on-failure declined to
+// restart it and the unit sat "inactive (dead)" with the sensor off the bus.
+func TestRunClassifiesAFailedStartAsStartup(t *testing.T) {
+	boom := errors.New("dial tcp 192.168.8.3:1883: no route to host")
+	r := newRig(t, func(r *testRig) { r.pub.startErr = boom })
+
+	err := r.Run(t.Context())
+	if !errors.Is(err, boom) {
+		t.Fatalf("Run = %v, want it to report the start failure", err)
+	}
+	if !errors.Is(err, ErrStartup) {
+		t.Errorf("Run = %v, want it classified as a start failure", err)
 	}
 }
 

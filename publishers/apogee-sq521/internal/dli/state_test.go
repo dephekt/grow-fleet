@@ -376,6 +376,22 @@ func TestUnusableStateFilesStartFromZeroAtInfo(t *testing.T) {
 			},
 		},
 		{
+			// The one accumulator the NaN/Inf/negative sweep over the float
+			// fields cannot cover. lastSampleUnixNano resumes straight into
+			// prev, where it feeds the ordinary max-gap guard: a sample dated
+			// before the epoch books five decades of uncredited time into
+			// gapSeconds and publishes a dli_gap of ~3e7 minutes for a day that
+			// is minutes old.
+			name: "a last-sample timestamp before the epoch",
+			write: func(t *testing.T, dir string) string {
+				p := filepath.Join(dir, StateFileName)
+				if err := os.WriteFile(p, []byte(`{"version":1,"zone":"UTC","day":"2026-07-28","umolSeconds":1,"lastSampleUnixNano":-1000000000000000000}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+		},
+		{
 			name: "a directory where the file should be",
 			write: func(t *testing.T, dir string) string {
 				p := filepath.Join(dir, StateFileName)

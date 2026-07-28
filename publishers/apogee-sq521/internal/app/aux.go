@@ -83,6 +83,11 @@ const timeZoneObjectID = "time_zone"
 // timeZoneComponent is the other half of that selector.
 const timeZoneComponent = "text"
 
+// dliObjectID is the auxiliary row statusLine prints alongside PPFD. Named
+// rather than spelled twice, for the reason the entities package exists: two
+// literals for one object id is how a rename leaves a lookup silently missing.
+const dliObjectID = "dli"
+
 // auxTable returns a freshly allocated auxiliary table. Fresh for the same
 // reason entities.Build is: the DisplayPrecision pointers must not be shared
 // between callers.
@@ -102,7 +107,7 @@ func auxTable(ppfdUnit string) []auxEntity {
 			Command:   true,
 		},
 		{
-			ObjectID:         "dli",
+			ObjectID:         dliObjectID,
 			Name:             "Daily light integral",
 			Component:        "sensor",
 			Unit:             "mol/m²/d",

@@ -485,6 +485,18 @@ func TestLoadValidationFailures(t *testing.T) {
 			wantIn: []string{envPPFDUnit, "must not be empty"},
 		},
 		{
+			// The same guard the node id and the topic prefix get, and for the
+			// same reasons: the unit is stored as an InfluxDB tag value and is
+			// interpolated into the sd_notify STATUS= line, whose payload is
+			// newline-separated KEY=VALUE. sdnotify folds CR/LF on the way out,
+			// so this is defence in depth rather than the only guard — but a
+			// value that survives only because a consumer sanitises it is one
+			// consumer away from being a problem.
+			name:   "ppfd unit with a newline",
+			env:    withEnv(map[string]string{envPPFDUnit: "µmol/s/m²\nWATCHDOG=1"}),
+			wantIn: []string{envPPFDUnit, "control characters"},
+		},
+		{
 			name:   "sdi-12 port blank",
 			env:    withEnv(map[string]string{envSDI12Port: "  "}),
 			wantIn: []string{envSDI12Port, "must not be empty"},

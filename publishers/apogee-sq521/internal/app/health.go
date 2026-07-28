@@ -214,7 +214,7 @@ func (a *App) statusLine() string {
 
 	a.mu.Lock()
 	ppfd, hasPPFD := a.lastValues[ppfdObjectID]
-	dliNow, hasDLI := a.lastValues["dli"]
+	dliNow, hasDLI := a.lastValues[dliObjectID]
 	readingAt := a.lastReadingAt
 	degraded := a.degraded
 	linkFailing, linkSeen, lastOK := a.publishFailing, a.publishSeen, a.lastPublishAt

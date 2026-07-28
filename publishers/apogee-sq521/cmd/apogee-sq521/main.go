@@ -38,6 +38,7 @@ import (
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/app"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/config"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/dli"
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/entities"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/mqttpub"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdnotify"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/serialport"
@@ -203,7 +204,13 @@ func serve(ctx context.Context, cfg config.Config, dialer app.Dialer, log *slog.
 		return fmt.Errorf("dli: %w", err)
 	}
 
-	topics := struct{ Prefix, NodeID string }{cfg.TopicPrefix, cfg.NodeID}
+	// Through entities.Topics rather than by concatenation. The same string is
+	// registered as the will here and asserted by mqttpub.Shutdown against what
+	// App passes it, and a mismatch is refused with ErrStatusTopicMismatch: the
+	// "offline" publish is skipped entirely and the availability falls back to
+	// the will. A hand-rolled copy of a wire contract that another package owns
+	// is exactly how that drift happens.
+	topics := entities.Topics{Prefix: cfg.TopicPrefix, NodeID: cfg.NodeID}
 	pub, err := mqttpub.New(mqttpub.Config{
 		Host:     cfg.MQTTHost,
 		Port:     cfg.MQTTPort,
@@ -212,7 +219,7 @@ func serve(ctx context.Context, cfg config.Config, dialer app.Dialer, log *slog.
 		NodeID:   cfg.NodeID,
 		// The will topic has to be known before the first CONNECT, which is
 		// why it is built here rather than asked of the app later.
-		StatusTopic:     topics.Prefix + "/" + topics.NodeID + "/status",
+		StatusTopic:     topics.Status(),
 		ShutdownTimeout: cfg.ShutdownTimeout,
 		Logger:          log,
 	})
@@ -234,6 +241,14 @@ func serve(ctx context.Context, cfg config.Config, dialer app.Dialer, log *slog.
 	}
 
 	if err := a.Run(ctx); err != nil {
+		// The split the doc comment above promises, made observable. Without it
+		// every Run failure — including one that means MQTT never started at all
+		// — was reported as an untidy teardown and the process exited 0, so
+		// Restart=on-failure left the unit dead and the sensor silently off the
+		// bus.
+		if errors.Is(err, app.ErrStartup) {
+			return err
+		}
 		log.Warn("teardown did not complete cleanly; the broker's will covers the retained availability",
 			"error", err)
 	}

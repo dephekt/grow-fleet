@@ -652,6 +652,45 @@ func TestAPartialFailureBlanksOnlyItsOwnEntity(t *testing.T) {
 	}
 }
 
+// ErrPortDead abandons the cycle where it happens, so every group after the
+// failing one is never asked — and those entities still need their retained
+// readings invalidated.
+//
+// The trap is that a cycle with one successful transaction counts as a success,
+// so recordFailure and its blankReadings never run. Nothing else would clear
+// them, and grow-app has no time-based staleness whatsoever: the last tilt
+// reading would be served as live for the whole reopen.
+func TestPortDeadBlanksTheGroupsItNeverAsked(t *testing.T) {
+	r := newRig(t)
+	session := newHealthySession()
+	r.probeAndAnnounce(t, t.Context(), session)
+	r.cycle(t.Context(), session, &pollState{seen: map[string]int{}})
+
+	tiltState := r.stateTopic("sensor", "tilt")
+	if got, _ := r.pub.last(tiltState); got != "1.20" {
+		t.Fatalf("tilt = %q, want a reading for the dead port to invalidate", got)
+	}
+
+	// ppfd (0M!) answers, then the port dies on detector_mv (0M1!). tilt (0M4!)
+	// is behind it in the table and is never reached.
+	r.pub.reset()
+	before := len(session.commands())
+	session.script("1", step{err: errPortDead})
+	if got := r.cycle(t.Context(), session, &pollState{seen: map[string]int{}}); got != outcomeReopen {
+		t.Fatalf("cycle = %v, want outcomeReopen", got)
+	}
+	if got := strings.Join(session.commands()[before:], ","); got != "M,M1" {
+		t.Fatalf("the dead cycle sent %q, want it to stop at 0M1!; this test proves nothing otherwise", got)
+	}
+
+	if got, ok := r.pub.last(tiltState); !ok || got != "" {
+		t.Errorf("tilt = %q (published=%v), want the empty payload: its transaction never ran", got, ok)
+	}
+	if got, _ := r.pub.last(r.stateTopic("sensor", "detector_mv")); got != "" {
+		t.Errorf("detector_mv = %q, want the empty payload", got)
+	}
+}
+
 // Error routing, one row per sdi12 sentinel. The recovery action differs per
 // class, and conflating them is what left the Python's desynced port desynced
 // forever.
