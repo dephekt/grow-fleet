@@ -109,8 +109,40 @@ func (b *broker) stop() {
 	already := b.stopped
 	b.stopped = true
 	b.mu.Unlock()
-	if !already {
+	if already {
+		return
+	}
+
+	// Bounded, because mochi v2.7.9 can deadlock inside Close.
+	//
+	// Server.Close -> closeListenerClients -> Clients.GetByListener -> Clients.Len
+	// takes an RLock, while a client arriving at that instant runs
+	// EstablishConnection -> attachClient -> Clients.Delete, which wants the
+	// Lock. Go's RWMutex is write-preferring, so the pending Lock parks the
+	// RLock behind it and neither side ever runs.
+	//
+	// This is reachable here rather than theoretical: t.Cleanup is LIFO, so a
+	// test that starts a second broker has that broker closed while the
+	// publisher is still up and retrying every ConnectRetryDelay (100ms) — an
+	// EstablishConnection is very likely in flight. It cost a full `go test`
+	// run a 10-minute timeout and a stack dump pointing into a vendored
+	// broker, on a change that touched none of this.
+	//
+	// Cleanup runs after the test has already reached its verdict, so waiting
+	// out an upstream deadlock buys nothing. Report it and move on: the
+	// goroutine dies with the test binary. Deliberately not a t.Error — a
+	// vendored broker's shutdown race is not this package's failure, and a
+	// flaky red teaches people to ignore the suite.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
 		_ = b.srv.Close()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		b.t.Logf("broker on %s did not shut down within 5s; this is the known mochi v2.7.9 "+
+			"Close/EstablishConnection deadlock, not a fault in the code under test", b.addr)
 	}
 }
 
