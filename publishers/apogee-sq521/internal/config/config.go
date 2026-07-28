@@ -324,8 +324,13 @@ func (c Config) String() string {
 
 // field formats one "Name (ENV_VAR) value" line. The env var is included so an
 // operator reading --check-config output knows which variable to edit.
+//
+// The column is 21 wide because the widest parenthesised variable name is
+// "(SDI12_WRITE_TIMEOUT)", which is exactly 21 characters. At 20 that one row
+// pushed its value a column right of every other, in output that is advertised
+// as a byte-stable golden file.
 func field(name, env string, value any) string {
-	return fmt.Sprintf("%-16s %-20s %v", name, "("+env+")", value)
+	return fmt.Sprintf("%-16s %-21s %v", name, "("+env+")", value)
 }
 
 // positive is the floor passed to loader.seconds for durations that merely have

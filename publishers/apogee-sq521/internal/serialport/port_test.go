@@ -413,6 +413,13 @@ func TestOpenResolvesSymlink(t *testing.T) {
 // TestOpenLogsBothTheLinkAndTheDevice: a swapped or re-enumerated adapter keeps
 // the by-id path identical and changes only the target, so a log line carrying
 // just one of the two makes that invisible in journalctl.
+//
+// It is at Debug, and that half is asserted too. Open is called once per port
+// session, and the daemon reopens on failure — every few cycles, for as long as
+// a mute sensor stays mute. At Info that was eleven lines in a 180 s run and ten
+// of the fourteen after the onset, which buries the line that says when the
+// trouble started. Announcing a session is the caller's call; only the caller
+// knows whether this open is the first or the four hundredth.
 func TestOpenLogsBothTheLinkAndTheDevice(t *testing.T) {
 	_, slave := newPTY(t)
 	link := filepath.Join(t.TempDir(), "usb-FTDI_FT231X_USB_UART_TEST-if00-port0")
@@ -420,20 +427,29 @@ func TestOpenLogsBothTheLinkAndTheDevice(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, nil))
-
-	p, err := Open(context.Background(), Options{Path: link, SettleDelay: -1, Logger: log})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+	open := func(t *testing.T, level slog.Level) string {
+		t.Helper()
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: level}))
+		p, err := Open(context.Background(), Options{Path: link, SettleDelay: -1, Logger: log})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer p.Close()
+		return buf.String()
 	}
-	defer p.Close()
 
-	out := buf.String()
+	out := open(t, slog.LevelDebug)
 	for _, want := range []string{link, slave} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log %q does not mention %q", out, want)
 		}
+	}
+
+	// The level a daemon actually runs at. Nothing may come out here, or the
+	// reopen loop is a line per open again.
+	if got := open(t, slog.LevelInfo); got != "" {
+		t.Errorf("Open wrote %q at Info; a caller that reopens every few cycles gets one of these per open", got)
 	}
 }
 

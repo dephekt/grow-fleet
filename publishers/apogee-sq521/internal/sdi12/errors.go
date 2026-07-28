@@ -53,11 +53,26 @@ var (
 	// port before returning; the caller does not need to call [Client.Resync].
 	ErrProtocol = errors.New("sdi12: malformed response")
 
-	// ErrNoValues means the sensor answered correctly and declared zero values:
-	// the command is unsupported on this unit. The SQ-521 does this for 0M4!
-	// (tilt) on serial numbers below 3033. Callers should stop asking rather
-	// than treat it as a fault.
+	// ErrNoValues means no value was obtained even though the sensor was
+	// answering: either it declared zero values up front, or it declared some
+	// and then delivered none. Callers should stop asking only in the first
+	// case — see [ErrHeaderNoValues].
 	ErrNoValues = errors.New("sdi12: sensor reports zero values")
+
+	// ErrHeaderNoValues narrows ErrNoValues to the one case that is a
+	// definitive statement about this unit's capabilities: the "atttn" header
+	// of an aM!/aV! reply declared a value count of zero. The SQ-521 does this
+	// for 0M4! (tilt) on serial numbers below 3033.
+	//
+	// Every error wrapping it also wraps ErrNoValues, so a caller classifying
+	// only by the four sentinels above is unaffected and the order above still
+	// holds. The distinction exists because the other ErrNoValues path —
+	// [Client.collect] finding nothing after a header that promised n values —
+	// is an adapter that swallowed the data response, which is transient. A
+	// caller that retires an entity permanently (the daemon does exactly that
+	// for tilt) must key on the header and never on a lost data line, or one
+	// glitch disables the channel until the next restart.
+	ErrHeaderNoValues = errors.New("sdi12: measurement header declares zero values")
 
 	// ErrPortDead means the file descriptor itself is unusable — EIO/ENODEV
 	// after a USB re-enumeration, EOF after a close, or a write that could not

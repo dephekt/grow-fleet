@@ -274,6 +274,20 @@ type Publisher struct {
 	// once by Start. An atomic pointer makes that harmless.
 	cm atomic.Pointer[autopaho.ConnectionManager]
 
+	// connectFailing is the transition guard for OnConnectError, and
+	// connectAttempts is what the recovery line reports.
+	//
+	// autopaho calls OnConnectError once per attempt and retries on
+	// ConnectRetryDelay for as long as the broker is away, so an unguarded line
+	// there is one per retry indefinitely — measured at 21 in 105 s of outage,
+	// which is ~17,280 a day at the production 5 s delay. That is the flood that
+	// buries a journal during a partition, and it is the same defect the rest of
+	// this daemon guards every recurring line against. Atomic rather than under
+	// p.mu because both callbacks run on autopaho's goroutines and neither may
+	// contend with a publish.
+	connectFailing  atomic.Bool
+	connectAttempts atomic.Uint64
+
 	mu         sync.Mutex // guards the fields below
 	started    bool
 	cancelConn context.CancelFunc
@@ -419,11 +433,9 @@ func (p *Publisher) clientConfig() autopaho.ClientConfig {
 		DisconnectPacketBuilder: p.disconnectPacket,
 		OnConnectionUp:          p.onConnectionUp,
 		OnConnectionDown:        p.onConnectionDown,
-		OnConnectError: func(err error) {
-			p.log.Warn("mqtt connection attempt failed", "broker", p.url.Host, "error", err)
-		},
-		Errors:     logAdapter{p.log, slog.LevelWarn},
-		PahoErrors: logAdapter{p.log, slog.LevelDebug},
+		OnConnectError:          p.onConnectError,
+		Errors:                  logAdapter{p.log, slog.LevelWarn},
+		PahoErrors:              logAdapter{p.log, slog.LevelDebug},
 
 		ClientConfig: paho.ClientConfig{
 			ClientID: ClientID(p.cfg.NodeID),
@@ -589,10 +601,35 @@ func (p *Publisher) OnConnectionUp(fn func()) {
 	p.mu.Unlock()
 }
 
+// onConnectError is autopaho's per-attempt failure callback, transition-guarded.
+//
+// The onset names the retry schedule, because a single line stating only that
+// one attempt failed tells an operator nothing about whether the daemon is still
+// trying. Everything after it is at Debug until a connection succeeds; see
+// Publisher.connectFailing for the volume that buys.
+func (p *Publisher) onConnectError(err error) {
+	n := p.connectAttempts.Add(1)
+	if p.connectFailing.CompareAndSwap(false, true) {
+		p.log.Warn("mqtt connection attempt failed", "broker", p.url.Host, "error", err,
+			"retry_every", p.cfg.ConnectRetryDelay,
+			"note", "further failures are logged at debug until one succeeds")
+		return
+	}
+	p.log.Debug("mqtt connection attempt still failing",
+		"broker", p.url.Host, "error", err, "failed_attempts", n)
+}
+
 // onConnectionUp is autopaho's callback. It must not block, so all it does is
 // record the manager and hand off.
 func (p *Publisher) onConnectionUp(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 	p.cm.Store(cm)
+	// The other half of the guard. Without it a suppressed run of failures and a
+	// broker that came back are indistinguishable in the journal, and the count
+	// is the only record of how many attempts the outage cost.
+	if p.connectFailing.Swap(false) {
+		p.log.Info("mqtt connection recovered", "broker", p.url.Host,
+			"failed_attempts", p.connectAttempts.Swap(0))
+	}
 	p.log.Info("mqtt connected", "broker", p.url.Host, "client_id", ClientID(p.cfg.NodeID))
 	go p.runConnectionUp(cm)
 }
