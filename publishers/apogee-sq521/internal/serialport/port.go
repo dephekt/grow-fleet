@@ -123,8 +123,15 @@ type Options struct {
 	// only useful in tests — on real hardware the adapter is still resetting.
 	SettleDelay time.Duration
 
-	// Logger receives the one line that records which symlink resolved to which
-	// device node. Nil uses [slog.Default].
+	// Logger receives the debug line that records which symlink resolved to
+	// which device node. Nil uses [slog.Default].
+	//
+	// It is at Debug and not Info because Open is called once per port session
+	// and a caller that reopens on failure — which is what the daemon driving
+	// this does, every few cycles, for as long as a mute sensor stays mute —
+	// would otherwise get a line per open forever. Announcing a port session is
+	// the caller's decision to make, because only the caller knows whether this
+	// open is the first one or the four hundredth of an outage.
 	Logger *slog.Logger
 }
 
@@ -292,7 +299,10 @@ func Open(ctx context.Context, opts Options) (*Port, error) {
 		return nil, err
 	}
 
-	opts.logger().LogAttrs(ctx, slog.LevelInfo, "serial port opened",
+	// Debug, not Info: see Options.Logger. The caller owns the operator-visible
+	// announcement, because it is the only one that knows whether this open is
+	// the first of a run or the eleventh of an outage.
+	opts.logger().LogAttrs(ctx, slog.LevelDebug, "serial port opened",
 		slog.String("link", opts.Path),
 		slog.String("device", resolved),
 	)

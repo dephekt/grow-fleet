@@ -29,21 +29,39 @@ type Store struct {
 
 // NewStore returns a Store rooted at dir, which is expected to be the
 // STATE_DIRECTORY systemd creates for the unit.
+//
+// An empty dir disables persistence, matching dli.StatePath's convention: the
+// unit may legitimately grant no StateDirectory, and the daemon is perfectly
+// useful without one — it just forgets the override across restarts. The guard
+// is not cosmetic. filepath.Join("", "timezone") is "timezone", a *relative*
+// path, so without it a hand-run daemon would write its override into whatever
+// happened to be the working directory — for a systemd unit, "/".
 func NewStore(dir string) *Store {
 	return &Store{dir: dir}
 }
 
-// Path is the full path of the override file.
+// Enabled reports whether this Store persists anything.
+func (s *Store) Enabled() bool { return s.dir != "" }
+
+// Path is the full path of the override file, or "" when persistence is
+// disabled.
 func (s *Store) Path() string {
+	if s.dir == "" {
+		return ""
+	}
 	return filepath.Join(s.dir, FileName)
 }
 
-// Load returns the persisted override, or "" when none is stored.
+// Load returns the persisted override, or "" when none is stored — which is
+// also what a Store with persistence disabled always reports.
 //
 // A missing file is the normal unset case, not an error. Every other failure —
 // a permissions problem, a directory where the file should be — is returned, so
 // the caller can log the difference between "no override" and "cannot tell".
 func (s *Store) Load() (string, error) {
+	if !s.Enabled() {
+		return "", nil
+	}
 	b, err := os.ReadFile(s.Path())
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -56,6 +74,9 @@ func (s *Store) Load() (string, error) {
 
 // Save atomically writes posix to the override file with mode 0644.
 func (s *Store) Save(posix string) error {
+	if !s.Enabled() {
+		return nil
+	}
 	if err := atomicfile.WriteFile(s.Path(), []byte(posix), 0o644); err != nil {
 		return fmt.Errorf("timezone: save override: %w", err)
 	}
@@ -65,6 +86,9 @@ func (s *Store) Save(posix string) error {
 // Clear removes the override file. Removing a file that is not there is not an
 // error, so callers can clear unconditionally.
 func (s *Store) Clear() error {
+	if !s.Enabled() {
+		return nil
+	}
 	if err := atomicfile.Remove(s.Path()); err != nil {
 		return fmt.Errorf("timezone: clear override: %w", err)
 	}

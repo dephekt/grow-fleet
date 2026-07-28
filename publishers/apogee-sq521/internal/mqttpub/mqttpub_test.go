@@ -1097,3 +1097,113 @@ func TestDisconnectPacket(t *testing.T) {
 		t.Errorf("reason code after offline is confirmed = %#x, want %#x (normal disconnection)", got, disconnectNormal)
 	}
 }
+
+// TestARepeatedConnectionFailureIsLoggedOnce is the same defect class as the
+// daemon's M4 and HIGH 5, in the one place that will actually bury a journal
+// during a broker partition.
+//
+// OnConnectError fires once per attempt and autopaho retries on
+// ConnectRetryDelay forever, so an unguarded line here is one per retry for as
+// long as the broker is away: measured at 21 lines in 105 s of outage, i.e.
+// ~17,280 a day at the production 5 s delay. Everything else that repeats in
+// this daemon — the probe warnings, the reopen notice, the publish failure, the
+// watchdog ping — is transition-guarded; this was the last one that was not.
+func TestARepeatedConnectionFailureIsLoggedOnce(t *testing.T) {
+	addr := freeAddr(t) // deliberately nothing listening
+	journal := newLogSink(t)
+
+	p := newPublisher(t, addr, func(c *Config) {
+		c.ConnectRetryDelay = 20 * time.Millisecond
+		c.ConnectTimeout = 100 * time.Millisecond
+		c.Logger = journal.logger()
+	})
+	mustStart(t, p)
+
+	// Long enough for well over a dozen attempts at a 20 ms retry delay.
+	const attempts = 15
+	deadline := time.Now().Add(5 * time.Second)
+	for journal.count("mqtt connection attempt") < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(time.Duration(attempts) * 20 * time.Millisecond)
+
+	if n := journal.count("mqtt connection attempt failed"); n > 1 {
+		t.Errorf("%q appears %d times across ~%d attempts, want 1; at the production 5s retry that is ~%d a day:\n%s",
+			"mqtt connection attempt failed", n, attempts, 24*60*60/5, journal.dump())
+	}
+	if n := journal.count("level=WARN"); n > 1 {
+		t.Errorf("%d warnings for one unreachable broker:\n%s", n, journal.dump())
+	}
+
+	// And it says so when it recovers, or a suppressed line and a fixed broker
+	// are indistinguishable.
+	b := startBroker(t, addr)
+	b.watch(wildcard)
+	mustConnect(t, p)
+	waitForLine(t, journal, "mqtt connection recovered")
+
+	if err := p.Shutdown(sigtermContext(), statusTopic); err != nil {
+		t.Errorf("Shutdown: %v", err)
+	}
+}
+
+// waitForLine blocks until substr appears in the captured journal.
+func waitForLine(t *testing.T, journal *logSink, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if journal.count(substr) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %q in the journal:\n%s", substr, journal.dump())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// logSink captures what the daemon would write to the journal, at the level the
+// process actually runs at. Several of the defects this package guards against
+// are log-volume defects, which makes "how many times does this line appear" a
+// property worth a test.
+type logSink struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func newLogSink(t *testing.T) *logSink {
+	t.Helper()
+	return &logSink{}
+}
+
+func (s *logSink) logger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(s, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+func (s *logSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	s.lines = append(s.lines, strings.TrimRight(string(p), "\n"))
+	s.mu.Unlock()
+	return len(p), nil
+}
+
+func (s *logSink) count(substr string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, line := range s.lines {
+		if strings.Contains(line, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *logSink) dump() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.lines) == 0 {
+		return "(nothing)"
+	}
+	return "  " + strings.Join(s.lines, "\n  ")
+}
