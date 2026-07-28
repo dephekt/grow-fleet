@@ -1,0 +1,110 @@
+# Go publisher daemons (publishers/**) — sibling to firmware.yml and
+# arduino-firmware.yml. Cross-compiles a daemon for its target host and pushes it
+# as the same shape of GHCR OCI artifact the firmware uses, under a different
+# artifact type (application/vnd.stackdrift.grow-publisher.v1) because it is a
+# binary you install next to a sensor, not an image you flash onto one.
+#
+# This workflow only publishes. Build, vet, gofmt, and `go test -race` live in
+# checks.yml and gate every PR, which is why nothing here runs on pull_request:
+# publishing is a release action, and a PR must never be able to push a package.
+name: publisher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "publishers/**"
+      - "scripts/package_publisher.py"
+      - "scripts/publish_packages.py"
+      - "scripts/fleetlib.py"
+      - ".github/workflows/publisher.yml"
+  workflow_dispatch:
+
+env:
+  OCI_REGISTRY: ghcr.io
+  OCI_OWNER: dephekt
+  OCI_PACKAGE_PREFIX: grow-fleet
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: publishers/apogee-sq521/go.mod
+          cache-dependency-path: publishers/apogee-sq521/go.sum
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v2.0.0
+
+      - id: publish_ready
+        name: Check protected publish configuration
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -eu
+          # Skip cleanly rather than failing when the registry secrets are not
+          # configured yet — the same posture firmware.yml takes for
+          # FLEET_SECRETS_YAML_B64. workflow_dispatch stays build-only so a manual
+          # run from a feature branch cannot publish a package built from unmerged
+          # code (arduino-firmware.yml gates its dispatch identically).
+          if [ -z "${GHCR_USER:-}" ] || [ -z "${GHCR_TOKEN:-}" ] || [ "${{ github.event_name }}" != "push" ]; then
+            echo "::notice::Build-only (no GHCR_USER/GHCR_TOKEN, or not a push event)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: meta
+        name: Build edge version metadata
+        run: |
+          set -eu
+          # Same scheme firmware.yml uses, and the one EDGE_VERSION_RE and the
+          # edge pruning both parse: edge-<YYYYMMDDTHHMMSSZ>-<12-char sha>.
+          sha="$(git rev-parse HEAD)"
+          version="edge-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Packaging runs unconditionally so an unpublishable run still proves the
+      # release build works, exactly as the compile jobs do for firmware.
+      - name: Package apogee-sq521
+        run: |
+          uv run --locked python scripts/package_publisher.py apogee-sq521 \
+            --version "${{ steps.meta.outputs.version }}" \
+            --source-sha "${{ steps.meta.outputs.sha }}"
+
+      - name: Login to GHCR
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | oras login "$OCI_REGISTRY" -u "$GHCR_USER" --password-stdin
+
+      - name: Publish apogee-sq521
+        if: steps.publish_ready.outputs.ready == 'true'
+        env:
+          # GHCR_TOKEN needs delete:packages for --prune-edge; without it the
+          # prune warns and publishing still succeeds.
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          OCI_SOURCE_URL: https://github.com/${{ github.repository }}
+        run: |
+          uv run --locked python scripts/publish_packages.py \
+            --kind binary --prune-edge --keep-edge 10 apogee-sq521

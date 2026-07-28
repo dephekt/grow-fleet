@@ -7,7 +7,9 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -20,10 +22,66 @@ DEFAULT_OCI_PACKAGE_PREFIX = "grow-fleet"
 GITHUB_API_BASE = "https://api.github.com"
 DEFAULT_OCI_SOURCE_URL = ""
 OCI_SOURCE_ANNOTATION = "org.opencontainers.image.source"
-OCI_ARTIFACT_TYPE = "application/vnd.stackdrift.grow-firmware.v1"
-OCI_MANIFEST_MEDIA_TYPE = "application/vnd.stackdrift.grow-firmware.manifest.v1+json"
+OCI_FIRMWARE_ARTIFACT_TYPE = "application/vnd.stackdrift.grow-firmware.v1"
+OCI_FIRMWARE_MANIFEST_MEDIA_TYPE = "application/vnd.stackdrift.grow-firmware.manifest.v1+json"
+OCI_PUBLISHER_ARTIFACT_TYPE = "application/vnd.stackdrift.grow-publisher.v1"
+OCI_PUBLISHER_MANIFEST_MEDIA_TYPE = "application/vnd.stackdrift.grow-publisher.manifest.v1+json"
 PACKAGE_LIST_PAGE_SIZE = 50
 EDGE_VERSION_RE = re.compile(r"^edge-(?P<created>\d{8}T\d{6}Z)-(?P<sha>[0-9a-f]{7,40})$")
+
+
+@dataclass(frozen=True)
+class ArtifactKind:
+    """What a ``dist/<name>/`` tree holds, and how it is pushed.
+
+    This module grew up serving exactly one payload — flashable ESPHome firmware —
+    so the OCI artifact type, the manifest layer's media type, and the "is this
+    actually flashable?" guard were all module constants. The manifest's
+    ``flashable`` boolean (written by ``package_device.py`` and ``build_arduino.py``)
+    is the seam: making the kind explicit lets a payload that is not firmware —
+    the Go publisher daemons under ``publishers/`` — reuse the dist layout, the
+    edge tag scheme, and the GHCR pruning without inheriting a guard that cannot
+    mean anything for it.
+
+    Everything below the kind (``oci_ref``, ``list_oci_tags``,
+    ``edge_cleanup_candidates``, ``list_ghcr_package_versions``,
+    ``delete_ghcr_package_version``) is already payload-agnostic and takes the
+    package name as data, so only these three values had to be lifted.
+    """
+
+    name: str
+    artifact_type: str
+    manifest_media_type: str
+    require_flashable: bool
+
+
+FIRMWARE_KIND = ArtifactKind(
+    name="firmware",
+    artifact_type=OCI_FIRMWARE_ARTIFACT_TYPE,
+    manifest_media_type=OCI_FIRMWARE_MANIFEST_MEDIA_TYPE,
+    require_flashable=True,
+)
+BINARY_KIND = ArtifactKind(
+    name="binary",
+    artifact_type=OCI_PUBLISHER_ARTIFACT_TYPE,
+    manifest_media_type=OCI_PUBLISHER_MANIFEST_MEDIA_TYPE,
+    require_flashable=False,
+)
+KINDS = {kind.name: kind for kind in (FIRMWARE_KIND, BINARY_KIND)}
+DEFAULT_KIND = FIRMWARE_KIND
+
+
+def resolve_kind(name: str) -> ArtifactKind:
+    """Look up a kind by name, diagnosing a bad one rather than raising KeyError.
+
+    ``--kind`` declares ``choices``, but argparse does not validate a default it
+    took from the environment, so a typo in ``PACKAGE_KIND`` reaches here.
+    """
+    try:
+        return KINDS[name]
+    except KeyError:
+        known = ", ".join(sorted(KINDS))
+        raise SystemExit(f"unknown artifact kind: {name} (choose one of: {known})") from None
 
 
 def authorization_header(auth_user: str, token: str, auth_scheme: str) -> str:
@@ -67,29 +125,56 @@ def upload_file(
         response.read()
 
 
-def publish_device(
+def manifest_path(dist_root: Path, name: str) -> Path:
+    return dist_root / name / f"{name}.manifest.json"
+
+
+def read_manifest(dist_root: Path, name: str) -> dict[str, Any]:
+    path = manifest_path(dist_root, name)
+    if not path.exists():
+        raise FileNotFoundError(f"missing manifest: {path}")
+    manifest: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return manifest
+
+
+def load_publishable_manifest(dist_root: Path, name: str, kind: ArtifactKind) -> dict[str, Any]:
+    """Read the manifest and refuse it if it does not match ``kind``.
+
+    Firmware must declare ``flashable: true`` — a ci-placeholder build carries
+    compile-only secrets and must never reach a device. The check is symmetric on
+    purpose: a firmware manifest published under a non-firmware kind would land
+    under the wrong artifact type and grow-app would simply not see it, which is
+    a silent failure rather than a loud one.
+    """
+    path = manifest_path(dist_root, name)
+    manifest = read_manifest(dist_root, name)
+    if kind.require_flashable:
+        if manifest.get("flashable") is not True:
+            raise ValueError(f"refusing to publish non-flashable manifest: {path}")
+    elif "flashable" in manifest:
+        raise ValueError(f"refusing to publish a firmware manifest as {kind.name}: {path}")
+    return manifest
+
+
+def publish_artifact(
     dist_root: Path,
-    device: str,
+    name: str,
     package_user: str,
     auth_user: str,
     token: str,
     auth_scheme: str,
     base_url: str,
+    *,
+    kind: ArtifactKind = DEFAULT_KIND,
 ) -> None:
-    device_dir = dist_root / device
-    manifest_path = device_dir / f"{device}.manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"missing manifest: {manifest_path}")
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("flashable") is not True:
-        raise ValueError(f"refusing to publish non-flashable manifest: {manifest_path}")
+    manifest = load_publishable_manifest(dist_root, name, kind)
     package = manifest["package"]
     version = manifest["version"]
 
     preflight_package_access(base_url, auth_user, token, auth_scheme, package_user, package)
 
-    for filename in manifest["artifact_filenames"] + [manifest_path.name]:
+    artifact_dir = dist_root / name
+    for filename in manifest["artifact_filenames"] + [manifest_path(dist_root, name).name]:
         upload_file(
             base_url,
             auth_user,
@@ -98,7 +183,7 @@ def publish_device(
             package_user,
             package,
             version,
-            device_dir / filename,
+            artifact_dir / filename,
         )
 
 
@@ -247,33 +332,28 @@ def oci_ref(registry: str, owner: str, package_prefix: str, package: str, versio
     return f"{oci_repository(registry, owner, package_prefix, package)}:{version}"
 
 
-def publish_device_oci(
+def publish_artifact_oci(
     dist_root: Path,
-    device: str,
+    name: str,
     registry: str,
     owner: str,
     package_prefix: str,
     source_url: str | None = None,
+    *,
+    kind: ArtifactKind = DEFAULT_KIND,
 ) -> None:
-    device_dir = dist_root / device
-    manifest_path = device_dir / f"{device}.manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"missing manifest: {manifest_path}")
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("flashable") is not True:
-        raise ValueError(f"refusing to publish non-flashable manifest: {manifest_path}")
+    manifest = load_publishable_manifest(dist_root, name, kind)
 
     package = str(manifest["package"])
     version = str(manifest["version"])
     target = oci_ref(registry, owner, package_prefix, package, version)
-    args = ["oras", "push", target, "--artifact-type", OCI_ARTIFACT_TYPE]
+    args = ["oras", "push", target, "--artifact-type", kind.artifact_type]
     if source_url:
         args.extend(["--annotation", f"{OCI_SOURCE_ANNOTATION}={source_url}"])
     for filename in manifest["artifact_filenames"]:
         args.append(f"{filename}:application/octet-stream")
-    args.append(f"{manifest_path.name}:{OCI_MANIFEST_MEDIA_TYPE}")
-    subprocess.run(args, check=True, cwd=device_dir)
+    args.append(f"{manifest_path(dist_root, name).name}:{kind.manifest_media_type}")
+    subprocess.run(args, check=True, cwd=dist_root / name)
 
 
 def list_oci_tags(registry: str, owner: str, package_prefix: str, package: str) -> list[str]:
@@ -416,8 +496,19 @@ def prune_edge_oci_packages(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Publish packaged firmware artifacts.")
-    parser.add_argument("devices", nargs="+", help="Device names to publish.")
+    parser = argparse.ArgumentParser(description="Publish packaged fleet artifacts.")
+    parser.add_argument(
+        "names",
+        nargs="+",
+        metavar="NAME",
+        help="dist/<NAME>/ directories to publish (firmware devices, publisher daemons).",
+    )
+    parser.add_argument(
+        "--kind",
+        choices=sorted(KINDS),
+        default=os.environ.get("PACKAGE_KIND", DEFAULT_KIND.name),
+        help="Payload kind, which selects the OCI artifact type and the flashable guard.",
+    )
     parser.add_argument(
         "--dist-root", default="dist", help="Directory containing packaged artifacts."
     )
@@ -483,19 +574,20 @@ def main() -> None:
     args = parser.parse_args()
 
     dist_root = Path(args.dist_root)
+    kind = resolve_kind(args.kind)
     if args.provider == "ghcr-oci":
-        for device in args.devices:
-            publish_device_oci(
+        for name in args.names:
+            publish_artifact_oci(
                 dist_root,
-                device,
+                name,
                 args.oci_registry,
                 args.oci_owner,
                 args.oci_package_prefix,
                 args.oci_source_url,
+                kind=kind,
             )
             if args.prune_edge:
-                manifest_path = dist_root / device / f"{device}.manifest.json"
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest = read_manifest(dist_root, name)
                 removed = prune_edge_oci_packages(
                     args.oci_registry,
                     args.oci_owner,
@@ -529,10 +621,9 @@ def main() -> None:
     if not auth_user:
         auth_user = args.package_user
 
-    for device in args.devices:
+    for name in args.names:
         if args.preflight_only:
-            manifest_path = dist_root / device / f"{device}.manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = read_manifest(dist_root, name)
             preflight_package_access(
                 args.base_url,
                 auth_user,
@@ -542,18 +633,18 @@ def main() -> None:
                 str(manifest["package"]),
             )
             continue
-        publish_device(
+        publish_artifact(
             dist_root,
-            device,
+            name,
             args.package_user,
             auth_user,
             token,
             auth_scheme,
             args.base_url,
+            kind=kind,
         )
         if args.prune_edge:
-            manifest_path = dist_root / device / f"{device}.manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = read_manifest(dist_root, name)
             removed = prune_edge_packages(
                 args.base_url,
                 auth_user,
