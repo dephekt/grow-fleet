@@ -206,8 +206,11 @@ func (c *Client) transaction(ctx context.Context, cmd string) ([]float64, error)
 	}
 
 	// 5. A zero value count is the sensor declining the command, not a fault.
+	//    This is the only place ErrHeaderNoValues is produced: it is the sole
+	//    ErrNoValues path where the sensor itself said "I have nothing to
+	//    measure", as opposed to having promised values that never arrived.
 	if count == 0 {
-		return nil, fmt.Errorf("sdi12: %s: measurement reports 0 values: %w", cmd, ErrNoValues)
+		return nil, fmt.Errorf("sdi12: %s: measurement reports 0 values: %w: %w", cmd, ErrHeaderNoValues, ErrNoValues)
 	}
 
 	// 6. ttt > 0 means "call back later"; the sensor announces readiness by

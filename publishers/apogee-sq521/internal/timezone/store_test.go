@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const londonTZ = "GMT0BST,M3.5.0/1,M10.5.0"
@@ -191,5 +192,68 @@ func TestStorePath(t *testing.T) {
 	s := NewStore("/var/lib/apogee")
 	if got, want := s.Path(), "/var/lib/apogee/timezone"; got != want {
 		t.Errorf("Path = %q, want %q", got, want)
+	}
+}
+
+// A unit that granted no StateDirectory must not leave a file behind.
+//
+// filepath.Join("", "timezone") is the relative path "timezone", so an
+// unguarded Store would write the override into the process's working
+// directory — "/" for a systemd unit, and whatever the operator happened to be
+// standing in for a hand-run one. Persistence is disabled instead, matching
+// dli.StatePath's treatment of the same empty value.
+func TestAStoreWithNoDirectoryPersistsNothing(t *testing.T) {
+	// A directory the test owns, so a regression writes here and is caught
+	// rather than scattering files across the repository.
+	t.Chdir(t.TempDir())
+
+	s := NewStore("")
+	if s.Enabled() {
+		t.Error("a Store with no directory reports itself enabled")
+	}
+	if got := s.Path(); got != "" {
+		t.Errorf("Path() = %q, want \"\"; a relative path would land in the working directory", got)
+	}
+
+	if err := s.Save(londonTZ); err != nil {
+		t.Errorf("Save = %v, want nil", err)
+	}
+	if got, err := s.Load(); err != nil || got != "" {
+		t.Errorf("Load = (%q, %v), want (\"\", nil)", got, err)
+	}
+	if err := s.Clear(); err != nil {
+		t.Errorf("Clear = %v, want nil", err)
+	}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the working directory: %v", err)
+	}
+	for _, e := range entries {
+		t.Errorf("a disabled Store created %q in the working directory", e.Name())
+	}
+}
+
+// The Manager must run on a disabled Store without warning about writes that
+// were never going to happen.
+func TestManagerOnADisabledStore(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m := NewManager(NewStore(""), time.UTC, nil)
+	m.Start()
+	if got := m.State(); got != "" {
+		t.Errorf("State after Start = %q, want \"\"", got)
+	}
+
+	if got := m.Apply(londonTZ); got != londonTZ {
+		t.Errorf("Apply = %q, want the accepted bytes echoed", got)
+	}
+	if got := m.Location().String(); got != londonTZ {
+		t.Errorf("Location = %q, want the applied zone", got)
+	}
+	// The no-op short-circuit must still hold: a re-push of the same value is
+	// acknowledged without pretending a write failed.
+	if got := m.Apply(londonTZ); got != londonTZ {
+		t.Errorf("re-Apply = %q, want the same echo", got)
 	}
 }

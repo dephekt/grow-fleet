@@ -356,6 +356,45 @@ func TestClientMeasureNoDataAtAll(t *testing.T) {
 	}
 }
 
+// ErrHeaderNoValues must separate "this unit cannot measure that" from "the
+// adapter ate the data response". The daemon retires an optional entity
+// permanently on the first, and merely skips a poll on the second, so a
+// classification that could not tell them apart would disable tilt for the life
+// of the process after one swallowed line.
+func TestHeaderNoValuesIsNarrowerThanNoValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		responses  []string
+		wantHeader bool
+	}{
+		{
+			// A pre-3033 unit answering 0M4!: the header itself says zero.
+			name:       "header declares zero",
+			responses:  []string{"00000\r\n"},
+			wantHeader: true,
+		},
+		{
+			// The header promised one value; D0! answered with a bare address.
+			name:       "header promised, data did not arrive",
+			responses:  []string{"00011\r\n0\r\n", "0\r\n"},
+			wantHeader: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestClient(t, tc.responses...)
+			_, err := c.Measure(t.Context(), "4")
+			if !errors.Is(err, ErrNoValues) {
+				t.Fatalf("Measure error = %v, want it to wrap ErrNoValues", err)
+			}
+			if got := errors.Is(err, ErrHeaderNoValues); got != tc.wantHeader {
+				t.Errorf("errors.Is(%v, ErrHeaderNoValues) = %v, want %v", err, got, tc.wantHeader)
+			}
+		})
+	}
+}
+
 // A wedged FTDI is the failure the write deadline exists for: without one the
 // Python's poll loop blocked forever, taking the MQTT keepalive with it.
 func TestClientPortDead(t *testing.T) {
