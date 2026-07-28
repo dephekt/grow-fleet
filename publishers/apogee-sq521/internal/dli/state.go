@@ -114,6 +114,18 @@ func loadState(path string) (state, error) {
 		}
 	}
 
+	// The one accumulator the loop above cannot cover, and it needs the same
+	// treatment for the same reason. lastSampleUnixNano is resumed straight into
+	// prev, where it feeds the ordinary max-gap guard: a negative value dates the
+	// last sample before the epoch, so the first Add of the day books five
+	// decades of uncredited time into gapSeconds and publishes a dli_gap of ~3e7
+	// minutes for a day that is minutes old. Zero is the documented "no previous
+	// sample" sentinel and stays legal.
+	if s.LastSampleUnixNano < 0 {
+		return state{}, fmt.Errorf("%w: %s: implausible last sample timestamp %d",
+			errNoState, path, s.LastSampleUnixNano)
+	}
+
 	return s, nil
 }
 

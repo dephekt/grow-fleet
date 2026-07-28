@@ -623,7 +623,7 @@ func (a *App) measure(ctx context.Context, s Session, groups []subGroup, st *pol
 	var out []reading
 	var res measureResult
 
-	for _, g := range groups {
+	for i, g := range groups {
 		vals, err := s.Measure(ctx, g.sub)
 		if err != nil {
 			res.fails++
@@ -635,6 +635,16 @@ func (a *App) measure(ctx context.Context, s Session, groups []subGroup, st *pol
 				out = append(out, reading{entity: e})
 			}
 			if res.portDead {
+				// The groups after this one are never asked, and they still need
+				// a reading each. Without them a cycle where an earlier group
+				// succeeded counts as a success — so recordFailure, and with it
+				// blankReadings, never runs — and those entities keep last
+				// cycle's retained value standing as live across the reopen.
+				for _, rest := range groups[i+1:] {
+					for _, e := range rest.entities {
+						out = append(out, reading{entity: e})
+					}
+				}
 				return out, res
 			}
 			continue

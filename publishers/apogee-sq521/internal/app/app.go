@@ -310,6 +310,18 @@ type App struct {
 	lastPublishAt  time.Time
 }
 
+// ErrStartup marks a [App.Run] failure that happened before the daemon was
+// running, as opposed to one that happened on the way out.
+//
+// The two need different exit codes and Run returns them through the same
+// error. A teardown that did not complete is not worth a non-zero exit — the
+// broker's will covers the retained availability — but a start that failed is:
+// without the distinction a daemon that could not bring MQTT up at all exits 0,
+// systemd's Restart=on-failure declines to restart it, and the unit sits
+// "inactive (dead)" with nothing but a warning in the journal. That is exactly
+// the silent-success failure mode this codebase exists to eliminate.
+var ErrStartup = errors.New("app: could not start")
+
 // outage is what the failure ladder knows about the current run of failures.
 //
 // It exists because the line that marks an outage used to name only an MQTT
@@ -514,7 +526,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	if err := a.deps.Publisher.Start(ctx); err != nil {
-		return fmt.Errorf("app: start mqtt: %w", err)
+		return fmt.Errorf("%w: start mqtt: %w", ErrStartup, err)
 	}
 
 	// Ready as soon as MQTT is dialing, not after the sensor opens. A Type=notify
@@ -540,6 +552,13 @@ func (a *App) Run(ctx context.Context) error {
 		"offline_after_cycles", a.cfg.OfflineAfter,
 		"offline_after_at_most", a.offlineAfterAtMost(),
 	)
+
+	// Seeded before the health goroutine can read it. The heartbeat's zero value
+	// is the Unix epoch, so a health tick that lands before the poll goroutine's
+	// very first beat computes a staleness of five decades, logs the Error that
+	// says the loop has parked, and withholds the watchdog ping — about a daemon
+	// that is a few microseconds old.
+	a.beat()
 
 	var wg sync.WaitGroup
 	wg.Add(3)
