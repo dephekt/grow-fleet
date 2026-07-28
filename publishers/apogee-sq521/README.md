@@ -190,7 +190,14 @@ mkdir -p /tmp/apogee && cd /tmp/apogee
 oras pull ghcr.io/dephekt/grow-fleet-apogee-sq521:<tag>
 
 # the manifest carries the digests; check them before installing  (needs jq, bash)
-sha256sum -c <(jq -r '.sha256 | to_entries[] | "\(.value)  \(.key)"' apogee-sq521.manifest.json)
+# No jq on this Pi (Raspberry Pi OS does not ship it), so read the digest with
+# grep rather than adding a dependency just to check a download.
+grep -A2 '"sha256"' apogee-sq521.manifest.json | grep apogee-sq521-linux-arm64 | sed 's/.*: "//;s/".*//'
+sha256sum apogee-sq521-linux-arm64 | cut -d' ' -f1
+# the two lines must match
+
+# If you do have jq, this compares them for you:
+#   sha256sum -c <(jq -r '.sha256 | to_entries[] | "\(.value)  \(.key)"' apogee-sq521.manifest.json)
 # -> apogee-sq521-linux-arm64: OK
 
 # keep the binary you are replacing, if there is one — `install` overwrites it.
@@ -469,6 +476,12 @@ On any other machine, take it from the media-stack deployment
 (`MQTT_EDGE_PASSWORD`). Either way it ends up on the `mosquitto_*` command line
 and therefore in `ps` for the duration — fine on the Pi, worth knowing on a
 shared box.
+
+> **`mosquitto_sub` is not installed on the Pi** (`apt install mosquitto-clients`
+> if you want it there). The broker is reachable from anywhere on the LAN, so the
+> simplest thing is to run these from your workstation and take the password from
+> media-stack rather than installing a package on the sensor host. The
+> `systemd-run` incantation above is only needed when you are *on* the Pi.
 
 ```sh
 mosquitto_sub -h 192.168.8.3 -u edge-daniel-home -P "$MQTT_PASSWORD" -v \
