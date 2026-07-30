@@ -66,9 +66,8 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      # NOTE: this commit is on the esphome-components branch feat/m5dial-spectrum and is NOT
-      # PUSHED YET — CI and OTA cannot resolve it until it is. Bump together with fleet.yaml's
-      # component_dependency.
+      # Pushed on the esphome-components branch feat/m5dial-spectrum (not yet merged to main).
+      # Bump together with fleet.yaml's component_dependency.
       ref: bfa90791bbba66ec0a4ba39499b0b3b9c89d2536
       path: .
     components:
@@ -98,6 +97,25 @@ wifi:
 time:
   - platform: sntp
     id: sntp_time
+
+# LVGL's built-in montserrat fonts carry ASCII only, so "µmol/m²/s" rendered as tofu boxes on the
+# panel. This font exists purely to add the two non-ASCII glyphs the PAR unit needs. Note U+207B
+# (superscript minus) is deliberately NOT used anywhere — it is missing from many faces, so the unit
+# is written "µmol/m²/s" rather than "µmol·m⁻²·s⁻¹".
+#
+# `glyphs` is an explicit allow-list: any character rendered in this font and absent here becomes a
+# box again, silently. It must cover the union of every string drawn in font_unit — currently
+# "µmol/m²/s", "no reading" and "sensor offline" (see the refresh_par script). Update it on any
+# wording change.
+#
+# Everything else on screen stays on the built-in montserrat and is therefore ASCII-ONLY. That is
+# why the no-data placeholder is "--" and not an em dash: an em dash is non-ASCII and rendered as a
+# box too.
+font:
+  - file: "gfonts://Roboto"
+    id: font_unit
+    size: 14
+    glyphs: " /adefgilmnorsµ²"
 
 globals:
   # Guard against an encoder<->number feedback loop. rotary_encoder's set_value() calls loop(),
@@ -151,7 +169,7 @@ mqtt:
                 snprintf(buf, sizeof(buf), "%.0f nm", root["peak"].as<float>());
                 lv_label_set_text(id(spectrum_peak), buf);
               } else {
-                lv_label_set_text(id(spectrum_peak), "—");
+                lv_label_set_text(id(spectrum_peak), "--");
               }
               lv_label_set_text(id(spectrum_sat), root["sat"].as<bool>() ? "SATURATED" : "");
               return true;
@@ -465,9 +483,9 @@ script:
             char buf[16];
             snprintf(buf, sizeof(buf), "%.0f", ppfd);
             lv_label_set_text(id(par_value), buf);
-            lv_label_set_text(id(par_note), "µmol · m⁻² · s⁻¹");
+            lv_label_set_text(id(par_note), "µmol/m²/s");
           } else {
-            lv_label_set_text(id(par_value), "—");
+            lv_label_set_text(id(par_value), "--");
             lv_label_set_text(id(par_note), online ? "no reading" : "sensor offline");
           }
 
@@ -509,7 +527,7 @@ lvgl:
                   id: par_value
                   align: CENTER
                   y: -18
-                  text: "—"
+                  text: "--"
                   text_color: 0xFFFFFF
                   text_font: montserrat_48
               - label:
@@ -518,6 +536,10 @@ lvgl:
                   y: 20
                   text: "sensor offline"
                   text_color: 0x909090
+                  # REQUIRED: this is the only label carrying non-ASCII (µ and ²). Without
+                  # font_unit it falls back to the built-in ASCII-only montserrat and both render
+                  # as boxes.
+                  text_font: font_unit
               - label:
                   id: dim_label
                   align: CENTER
@@ -549,7 +571,7 @@ lvgl:
                   id: spectrum_peak
                   align: BOTTOM_MID
                   y: -26
-                  text: "—"
+                  text: "--"
                   text_color: 0xC0C0C0
               - label:
                   id: spectrum_sat
