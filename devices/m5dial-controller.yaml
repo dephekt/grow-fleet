@@ -1,0 +1,567 @@
+# M5Stack Dial grow-light controller — the dimmer, with a live "dial it in" readout.
+#
+# Two swipeable screens on the round 240x240 panel:
+#   1. DIAL IN  — canopy PAR (big) + dimmer % on an arc. Rotate the knob to dim.
+#   2. SPECTRUM — live wavelength-coloured spectrum chart.
+#
+# It OWNS the grow-light dimmer: the knob and grow-app both write one template number, which
+# drives the Unit DAC2 (GP8413) on Port A -> the SF4000's RJ-11 dim input. It takes over this role
+# from atoms3u-sensor-rig (see the cutover note below).
+#
+# Hardware — M5StampS3 (ESP32-S3, 8MB flash, NO PSRAM). Pin map from the Espressif BSP
+# (esp-bsp/bsp/m5dial), every line verified on the real unit:
+#   GC9A01A 240x240 LCD   SPI: CLK 6, MOSI 5, CS 7, DC 4, RST 8, backlight 9
+#   FT3267 touch @0x38    internal I2C: SDA 11, SCL 12, INT 14  (NOT ft5x06's 0x48 default)
+#   BM8563 RTC  @0x51     internal I2C   |   WS1850S RFID @0x28  internal I2C (unused)
+#   Rotary encoder        pin_a 40, pin_b 41  (SWAPPED vs the BSP's A/B labels — see below)
+#   Front press ("WAKE")  GPIO 42
+#   Unit DAC2 @0x59       Port A I2C: SDA 13, SCL 15
+#
+# Build / flash:
+#   esphome compile devices/m5dial-controller.yaml
+#   esphome run     devices/m5dial-controller.yaml --device /dev/ttyACM0
+#   esphome logs    devices/m5dial-controller.yaml --device /dev/ttyACM0
+
+substitutions:
+  devicename: m5dial-controller
+  friendlyname: "M5Dial Controller"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.m5dial-controller
+    version: ${firmware_version}
+  on_boot:
+    # Re-assert the restored dimmer level once everything is set up. Ported verbatim in intent from
+    # atoms3u-sensor-rig: the template number restores its saved value in setup() via
+    # publish_state() only — it does NOT re-fire set_action — and the GP8413 powers up at 0V (its
+    # setup() writes only the range register). Without this the arc would read e.g. 80% while the
+    # light sat dark until the next knob turn. Priority -100 runs after all component setup(), so
+    # the number is restored and the DAC hub range is set.
+    #
+    # Re-apply via number.set (not output.set_level) so the 0-100% -> 0-10V mapping lives only in
+    # the number's set_action below; control() fires that action and re-saves to NVS — a negligible
+    # no-op once per boot. It also resyncs the encoder counter and the on-screen widgets.
+    - priority: -100
+      then:
+        - number.set:
+            id: grow_light_brightness
+            value: !lambda 'return id(grow_light_brightness).state;'
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB   # StampS3 = 8MB embedded flash, no PSRAM
+  framework:
+    type: esp-idf   # more free heap than arduino, which matters with LVGL and no PSRAM
+
+# m5dial_spectrum owns the LVGL spectrum chart. ESPHome's LVGL has no `chart` widget and its
+# geometry is not templatable (`line.points` / canvas draw coords go through `pixels_or_percent`,
+# which takes ints and percentages only), so the chart cannot be expressed in YAML.
+external_components:
+  - source:
+      type: git
+      url: https://github.com/dephekt/esphome-components.git
+      # NOTE: this commit is on the esphome-components branch feat/m5dial-spectrum and is NOT
+      # PUSHED YET — CI and OTA cannot resolve it until it is. Bump together with fleet.yaml's
+      # component_dependency.
+      ref: bfa90791bbba66ec0a4ba39499b0b3b9c89d2536
+      path: .
+    components:
+      - m5dial_spectrum
+
+logger:
+  level: DEBUG   # DEBUG during bring-up; drop to INFO once the screens are trusted
+  hardware_uart: USB_SERIAL_JTAG   # StampS3 has native USB only (no UART chip)
+
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+globals:
+  # Guard against an encoder<->number feedback loop. rotary_encoder's set_value() calls loop(),
+  # which publishes state and therefore fires on_value synchronously — so resyncing the counter
+  # from the number's set_action would immediately re-enter number.set. Set/cleared around the
+  # resync in the same loop iteration, so a plain bool is sufficient (no threading involved).
+  - id: knob_syncing
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+mqtt:
+  broker: 192.168.8.3              # media-server LAN IP; mosquitto-site listens on :1883
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/${devicename}
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  # Keep the firmware's DEBUG logs OFF the bus (serial still carries them).
+  log_topic:
+    topic: grow/daniel-home/${devicename}/debug
+    level: NONE
+
+  on_message:
+    # Compact, wavelength-binned spectrum published by grow-app (see src/lib/spectrum/dial.ts).
+    # Raw on_message rather than on_json_message: grow-app deletes the retained value by publishing
+    # an EMPTY payload when the spectrometer goes away, and an empty payload is not valid JSON, so
+    # on_json_message would never fire for the case we most need to react to.
+    - topic: grow/daniel-home/_app/spectrum/dial
+      qos: 1
+      then:
+        - lambda: |-
+            if (x.empty()) {
+              // Source gone. Never leave the old curve up — it reads as live.
+              id(dial_spectrum).clear_spectrum();
+              return;
+            }
+            bool ok = json::parse_json(x, [](JsonObject root) -> bool {
+              if (!root["bins"].is<JsonArrayConst>()) return false;
+              std::vector<uint8_t> bins;
+              bins.reserve(60);
+              for (JsonVariantConst v : root["bins"].as<JsonArrayConst>()) {
+                int b = v.as<int>();
+                bins.push_back((uint8_t) (b < 0 ? 0 : (b > 100 ? 100 : b)));
+              }
+              id(dial_spectrum).set_spectrum(bins);
+
+              if (root["peak"].is<float>()) {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%.0f nm", root["peak"].as<float>());
+                lv_label_set_text(id(spectrum_peak), buf);
+              } else {
+                lv_label_set_text(id(spectrum_peak), "—");
+              }
+              lv_label_set_text(id(spectrum_sat), root["sat"].as<bool>() ? "SATURATED" : "");
+              return true;
+            });
+            if (!ok) ESP_LOGW("dial", "Bad dial spectrum payload (%u bytes)", (unsigned) x.size());
+
+  on_connect:
+    - delay: 2s
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_firmware/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "${devicename}",
+            "projectName": "stackdrift.${devicename}",
+            "packageOwner": "${package_owner}",
+            "package": "${devicename}",
+            "device": "${devicename}",
+            "chipFamily": "ESP32-S3",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest"
+          }
+    # NOTE on objectId: it is ESPHome's slug of the entity NAME, not its yaml `id:` — the name
+    # "Screen Backlight" yields screen_backlight, NOT the id `backlight`. And wifi_info's ip_address
+    # is announced as a `sensor`, not a `text_sensor`. Both of those were wrong on the first pass and
+    # nothing complained: grow-app drops an unmatched objectId silently. Check the entities below
+    # against the retained grow/daniel-home/_discovery/+/${devicename}/+/config topics after any
+    # rename — that is the only authority. (The payload is JSON: no comments allowed inside it.)
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "${devicename}",
+            "groups": [
+              { "id": "grow_light", "title": "Grow Light", "order": 12, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
+              { "id": "display", "title": "Display", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "number", "objectId": "grow_light_brightness", "group": "grow_light", "role": "quick-control", "order": 10, "label": "Brightness" },
+              { "component": "light", "objectId": "screen_backlight", "group": "display", "order": 10, "label": "Screen Backlight" },
+              { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 },
+              { "component": "button", "objectId": "check_firmware_update", "group": "diagnostics", "order": 5 },
+              { "component": "sensor", "objectId": "wifi_signal", "group": "diagnostics", "order": 10 },
+              { "component": "sensor", "objectId": "uptime", "group": "diagnostics", "order": 20 },
+              { "component": "sensor", "objectId": "ip_address", "group": "diagnostics", "order": 30 }
+            ]
+          }
+    # This node's contribution to the logical grow lights: the DAC channel is the dimmer for "main".
+    # grow-app merges every device's _lights fragment by light id, so the Main Light card pulls
+    # on/off + schedule + power from the Athom plug and this dimmer from here.
+    #
+    # CUTOVER WARNING: mergedLights() merges fragments in nodeId-ALPHABETICAL order, last write wins
+    # per role. "atoms3u-sensor-rig" sorts before "m5dial-controller", so while both publish a
+    # dimmer for id:"main" this node silently wins. Do NOT rely on that — reflash atoms3u with its
+    # dimmer role removed. The join is stitched only by a matching "id":"main" + this schema
+    # version; change either on one node only and grow-app drops the dimmer with no error anywhere.
+    #
+    # ============================ DISABLED UNTIL CUTOVER ============================
+    # Publishing this claims the dimmer role for id:"main" the instant this node connects, and
+    # because the merge is alphabetical-last-wins, "m5dial-controller" BEATS "atoms3u-sensor-rig".
+    # While this node's DAC is not yet wired to the SF4000, enabling it would point grow-app's
+    # brightness control at an unconnected DAC and strand the real fixture at whatever voltage the
+    # AtomS3U last set. So it stays commented out through bring-up.
+    #
+    # Enable at Phase 4 step 4 — AFTER atoms3u has been reflashed without its dimmer role and the
+    # RJ-11 has been moved to this node's V0/G.
+    # - mqtt.publish:
+    #     topic: grow/daniel-home/${devicename}/_lights/config
+    #     retain: true
+    #     qos: 1
+    #     payload: |-
+    #       {
+    #         "schema": "grow-lights.v1",
+    #         "nodeId": "${devicename}",
+    #         "lights": [
+    #           { "id": "main", "roles": { "dimmer": "grow_light_brightness" } }
+    #         ]
+    #       }
+    # ===============================================================================
+
+i2c:
+  # Internal bus: FT3267 touch @0x38, BM8563 RTC @0x51, WS1850S RFID @0x28
+  - id: bus_internal
+    sda: 11
+    scl: 12
+    scan: true
+  # Port A (Grove, red): the Unit DAC2. A separate bus from the internal one.
+  - id: bus_porta
+    sda: 13
+    scl: 15
+    scan: true
+
+# ---------------- Grow-light dimmer (M5Stack Unit DAC2 / GP8413) ----------------
+# 0-10V dimmer wired to the SF4000's RJ-11 port (V0 -> DIM+, G -> DIM-), on Port A above. ESPHome's
+# built-in gp8403 output drives it; the GP8413 is the 15-bit model. This DAC2 answers at 0x59 (the
+# component default is 0x58) — the same non-default address as the AtomS3U's second DAC2 unit.
+#
+# SPLIT-DOMAIN CAVEATS (on/off lives on the Athom plug, brightness lives here) — carried over from
+# atoms3u-sensor-rig unchanged, because moving the DAC does not change any of them:
+#   - Fail-to-bright risk: the plug is a hardened autonomous actuator (rides out outages on its own
+#     clock); this node is NOT. If this node dies while the plug keeps the relay energized per its
+#     photoperiod, V0 stops being driven and many 0-10V LED drivers (SF-series included) read a
+#     floating dim input as 100% — uncontrolled full intensity from the one node that can dim it. A
+#     pulldown on V0 -> DIM+ makes a dead DAC fail to minimum instead (confirm the SF4000's actual
+#     open-input behavior before relying on it).
+#   - Cold-boot transient: on whole-tent power restore the ESP8266 plug boots in a few seconds and
+#     re-energizes the relay, while this ESP32-S3 boots slower and holds the DAC at 0V until the
+#     priority -100 re-assert — so the canopy sits at ~min brightness briefly, then jumps.
+#   - Fragile join: see the CUTOVER WARNING on the _lights fragment above.
+gp8403:
+  - id: grow_light_dac
+    model: GP8413
+    voltage: 10V
+    address: 0x59
+    i2c_id: bus_porta
+
+spi:
+  - id: bus_lcd
+    clk_pin: 6
+    mosi_pin: 5
+
+output:
+  - platform: ledc
+    pin: 9
+    id: backlight_out
+  - platform: gp8403
+    id: grow_light_dac_level
+    gp8403_id: grow_light_dac
+    channel: 0        # V0 screw terminal — the DIM+ wiring
+
+light:
+  - platform: monochromatic
+    output: backlight_out
+    name: "Screen Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+
+display:
+  # mipi_spi, not ili9xxx: ESPHome 2026.5 deprecates ili9xxx in favour of mipi_spi.
+  - platform: mipi_spi
+    id: dial_lcd
+    model: GC9A01A
+    spi_id: bus_lcd
+    cs_pin: 7
+    dc_pin: 4
+    reset_pin: 8
+    # mipi_spi defaults to 10MHz; the BSP runs this panel at 40MHz (BSP_LCD_PIXEL_CLOCK_HZ). At the
+    # default, LVGL flushes take 4x longer, which shows up as sluggish arc/chart redraws.
+    data_rate: 40MHz
+    dimensions:
+      width: 240
+      height: 240
+    invert_colors: true
+    auto_clear_enabled: false
+
+touchscreen:
+  - platform: ft5x06
+    id: dial_touch
+    i2c_id: bus_internal
+    address: 0x38      # FT3267; NOT the ft5x06 platform default of 0x48
+    interrupt_pin: 14
+    display: dial_lcd
+    # No transform: needed — verified on hardware that the panel's orientation already matches the
+    # display (top -> y~39, bottom -> y~193, left -> x~39, right -> x~221).
+
+sensor:
+  - platform: rotary_encoder
+    id: dial_knob
+    # SWAPPED vs the BSP's labels (BSP_ENCODER_A=41, BSP_ENCODER_B=40): wired per the BSP, a
+    # clockwise turn counts DOWN, which is backwards for a dimmer. Verified on hardware.
+    pin_a: 40
+    pin_b: 41
+    min_value: 0
+    max_value: 100
+    internal: true     # the dimmer number is the entity grow-app sees, not the raw counter
+    on_value:
+      - if:
+          condition:
+            lambda: 'return !id(knob_syncing);'
+          then:
+            - number.set:
+                id: grow_light_brightness
+                value: !lambda 'return x;'
+
+  # Live canopy PAR from the Apogee SQ-521, published by the Go apogee-sq521 daemon on the
+  # quantum-sensor Pi. The publisher deletes its retained value (empty payload) on the first failed
+  # measurement cycle, and mqtt_subscribe turns an unparseable payload into NAN — so NaN is a
+  # first-class "no reading" signal here, not an error. See also apogee_online below: the LWT is the
+  # other half, because a hard-crashed publisher leaves its last retained number on the broker.
+  - platform: mqtt_subscribe
+    id: apogee_ppfd
+    name: "Canopy PAR"
+    topic: grow/daniel-home/quantum-sensor/sensor/ppfd/state
+    qos: 1
+    unit_of_measurement: "µmol/s/m²"
+    accuracy_decimals: 0
+    internal: true     # a mirror of another device's entity; don't re-register it in grow-app
+    on_value:
+      - script.execute: refresh_par
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    entity_category: diagnostic
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+
+  # The quantum sensor's availability. Mirrors grow-app's liveQuantumPpfd() gating: a retained PPFD
+  # scalar left behind by a dead publisher must not be shown as live.
+  - platform: mqtt_subscribe
+    id: apogee_status
+    topic: grow/daniel-home/quantum-sensor/status
+    qos: 1
+    internal: true
+    on_value:
+      - script.execute: refresh_par
+
+binary_sensor:
+  - platform: gpio
+    id: dial_button
+    pin:
+      number: 42
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    internal: true
+    on_press:
+      # Cycle screens, so the dial is fully usable without touching the glass (wet hands, gloves).
+      - lambda: |-
+          uint32_t next = lv_obj_get_index(lv_tileview_get_tile_active(id(dial_tiles))) == 0 ? 1 : 0;
+          lv_obj_t *t = lv_obj_get_child(id(dial_tiles), next);
+          if (t != nullptr) lv_tileview_set_tile(id(dial_tiles), t, LV_ANIM_ON);
+
+number:
+  # SF4000 dimmer level. Maps 0-100% linearly to the DAC's 0-10V output on channel 0 (V0).
+  # set_action drives the DAC on every knob/app/web write; the esphome.on_boot hook above re-applies
+  # the restored value at startup (setup() only publishes it). The relay on the smart plug still
+  # owns real on/off — this only sets brightness.
+  - platform: template
+    name: "Grow Light Brightness"
+    id: grow_light_brightness
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 100
+    restore_value: true
+    optimistic: true
+    mode: slider
+    icon: mdi:brightness-percent
+    set_action:
+      - output.set_level:
+          id: grow_light_dac_level
+          level: !lambda 'return x / 100.0f;'
+      # Keep the physical knob's counter in step with writes that came from grow-app, so the next
+      # turn continues from the displayed value instead of jumping back. Guarded — see knob_syncing.
+      - lambda: |-
+          if ((int) id(dial_knob).state != (int) x) {
+            id(knob_syncing) = true;
+            id(dial_knob).set_value((int) x);
+            id(knob_syncing) = false;
+          }
+      - lvgl.arc.update:
+          id: dim_arc
+          value: !lambda 'return (int) x;'
+      - lvgl.label.update:
+          id: dim_label
+          text: !lambda 'return std::to_string((int) x) + "%";'
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: diagnostic
+
+  - platform: template
+    name: "Check Firmware Update"
+    entity_category: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+
+script:
+  # One place that decides what the PAR readout says, since three inputs feed it (the value, the
+  # publisher's availability, and NaN). Shared by both on_value triggers.
+  - id: refresh_par
+    mode: restart
+    then:
+      - lambda: |-
+          const bool online = id(apogee_status).state == "online";
+          const float ppfd = id(apogee_ppfd).state;
+          const bool live = online && !std::isnan(ppfd);
+          if (live) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%.0f", ppfd);
+            lv_label_set_text(id(par_value), buf);
+            lv_label_set_text(id(par_note), "µmol · m⁻² · s⁻¹");
+          } else {
+            lv_label_set_text(id(par_value), "—");
+            lv_label_set_text(id(par_note), online ? "no reading" : "sensor offline");
+          }
+
+lvgl:
+  displays: [dial_lcd]
+  touchscreens: [dial_touch]
+  buffer_size: 25%    # ~29KB at 240x240x16bpp; comfortable without PSRAM
+  # Deliberately NO `encoders:` block. The knob is bound straight to the dimmer number above rather
+  # than to LVGL's focus/edit model — on a two-screen appliance, "turn = dim" should hold no matter
+  # which widget LVGL thinks is focused.
+  widgets:
+    # A tileview, not pages: tiles are swipeable by touch, which is the requested gesture. ESPHome's
+    # LVGL pages only switch via explicit actions.
+    - tileview:
+        id: dial_tiles
+        scrollbar_mode: "OFF"
+        tiles:
+          - id: tile_dial
+            row: 0
+            column: 0
+            dir: [LEFT, RIGHT]
+            bg_color: 0x000000
+            bg_opa: COVER
+            widgets:
+              - arc:
+                  id: dim_arc
+                  align: CENTER
+                  width: 232
+                  height: 232
+                  min_value: 0
+                  max_value: 100
+                  value: 100
+                  adjustable: false   # the knob owns the value; the arc only reflects it
+                  arc_width: 12
+                  indicator:
+                    arc_color: 0xFFA000
+                    arc_width: 12
+              - label:
+                  id: par_value
+                  align: CENTER
+                  y: -18
+                  text: "—"
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_48
+              - label:
+                  id: par_note
+                  align: CENTER
+                  y: 20
+                  text: "sensor offline"
+                  text_color: 0x909090
+              - label:
+                  id: dim_label
+                  align: CENTER
+                  y: 66
+                  text: "100%"
+                  text_color: 0xFFA000
+                  text_font: montserrat_20
+
+          - id: tile_spectrum
+            row: 0
+            column: 1
+            dir: [LEFT, RIGHT]
+            bg_color: 0x000000
+            bg_opa: COVER
+            widgets:
+              # The chart container. Explicit width/height are REQUIRED: m5dial_spectrum reads them
+              # once at setup to lay its bars out, and a content-sized parent has no size yet.
+              - obj:
+                  id: spectrum_box
+                  align: CENTER
+                  y: -6
+                  width: 200
+                  height: 132
+                  bg_color: 0x000000
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  id: spectrum_peak
+                  align: BOTTOM_MID
+                  y: -26
+                  text: "—"
+                  text_color: 0xC0C0C0
+              - label:
+                  id: spectrum_sat
+                  align: BOTTOM_MID
+                  y: -8
+                  text: ""
+                  text_color: 0xFF4040
+
+m5dial_spectrum:
+  id: dial_spectrum
+  parent: spectrum_box
+  bin_count: 60         # must match grow-app's DIAL_BIN_COUNT
+  min_wavelength: 400   # must match grow-app's DIAL_RANGE_NM
+  max_wavelength: 750
+  gap: 0
