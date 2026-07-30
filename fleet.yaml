@@ -58,6 +58,25 @@ devices:
     release: true
     assets: *athom_plug_assets
     # no component_dependency: this config declares no external_components
+  m5dial-controller:
+    config: devices/m5dial-controller.yaml
+    esphome_name: m5dial-controller
+    node_id: m5dial-controller
+    project_name: stackdrift.m5dial-controller
+    package: m5dial-controller
+    package_owner: stackdrift-firmware
+    chip_family: ESP32-S3
+    release: true
+    # NOT the shared &stackdrift_esphome_components anchor: this device needs m5dial_spectrum,
+    # which does not exist at that pinned commit. Collapse this back onto the anchor once the
+    # component is merged to esphome-components main and the shared ref is bumped past it.
+    component_dependency:
+      source:
+        type: git
+        url: https://github.com/dephekt/esphome-components.git
+        # Unpushed — on branch feat/m5dial-spectrum. Must be pushed before CI can build this device.
+        ref: bfa90791bbba66ec0a4ba39499b0b3b9c89d2536
+        path: .
   m5stack-airq:
     config: devices/m5stack-airq.yaml
     esphome_name: m5stack-airq
