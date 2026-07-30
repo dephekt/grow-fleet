@@ -74,7 +74,7 @@ devices:
       source:
         type: git
         url: https://github.com/dephekt/esphome-components.git
-        # Unpushed — on branch feat/m5dial-spectrum. Must be pushed before CI can build this device.
+        # On branch feat/m5dial-spectrum (pushed, not yet merged to main).
         ref: bfa90791bbba66ec0a4ba39499b0b3b9c89d2536
         path: .
   m5stack-airq:
