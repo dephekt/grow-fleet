@@ -66,9 +66,8 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      # Pushed on the esphome-components branch feat/m5dial-spectrum (not yet merged to main).
       # Bump together with fleet.yaml's component_dependency.
-      ref: bfa90791bbba66ec0a4ba39499b0b3b9c89d2536
+      ref: 8465f8d8ebb3911ee1f863140d7cd3ccac84ddf9
       path: .
     components:
       - m5dial_spectrum
@@ -159,6 +158,8 @@ mqtt:
               std::vector<uint8_t> bins;
               bins.reserve(60);
               for (JsonVariantConst v : root["bins"].as<JsonArrayConst>()) {
+                // Stop at the chart's bin count so a malformed payload cannot size the allocation.
+                if (bins.size() >= 60) break;
                 int b = v.as<int>();
                 bins.push_back((uint8_t) (b < 0 ? 0 : (b > 100 ? 100 : b)));
               }
@@ -372,7 +373,7 @@ sensor:
     name: "Canopy PAR"
     topic: grow/daniel-home/quantum-sensor/sensor/ppfd/state
     qos: 1
-    unit_of_measurement: "µmol/s/m²"
+    unit_of_measurement: "µmol/m²/s"
     accuracy_decimals: 0
     internal: true     # a mirror of another device's entity; don't re-register it in grow-app
     on_value:
@@ -507,8 +508,6 @@ lvgl:
   displays: [dial_lcd]
   touchscreens: [dial_touch]
   buffer_size: 25%    # ~29KB at 240x240x16bpp; comfortable without PSRAM
-  # Boot orientation, matching the Screen Flip switch's RESTORE_DEFAULT_ON.
-  rotation: 180
   # Deliberately NO `encoders:` block. The knob is bound straight to the dimmer number above rather
   # than to LVGL's focus/edit model — on a two-screen appliance, "turn = dim" should hold no matter
   # which widget LVGL thinks is focused.
