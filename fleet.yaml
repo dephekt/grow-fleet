@@ -67,15 +67,13 @@ devices:
     package_owner: stackdrift-firmware
     chip_family: ESP32-S3
     release: true
-    # NOT the shared &stackdrift_esphome_components anchor: this device needs m5dial_spectrum,
-    # which does not exist at that pinned commit. Collapse this back onto the anchor once the
-    # component is merged to esphome-components main and the shared ref is bumped past it.
+    # NOT the shared &stackdrift_esphome_components anchor: m5dial_spectrum does not exist at that
+    # commit. Collapse onto the anchor once the shared ref is bumped past this one.
     component_dependency:
       source:
         type: git
         url: https://github.com/dephekt/esphome-components.git
-        # On branch feat/m5dial-spectrum (pushed, not yet merged to main).
-        ref: bfa90791bbba66ec0a4ba39499b0b3b9c89d2536
+        ref: 8465f8d8ebb3911ee1f863140d7cd3ccac84ddf9
         path: .
   m5stack-airq:
     config: devices/m5stack-airq.yaml
