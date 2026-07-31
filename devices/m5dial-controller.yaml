@@ -459,10 +459,6 @@ number:
           text: !lambda 'return std::to_string((int) x) + "%";'
 
 switch:
-  # The Dial hangs from its USB cable in the tent, so it reads upside down. There is no IMU on this
-  # board (the BSP sets BSP_CAPS_IMU 0, and the I2C scan finds only touch, RTC and RFID), so the
-  # orientation cannot be detected -- it has to be a setting. LVGL rotates the touch coordinates
-  # along with the framebuffer, so the tile swipe follows the flip.
   - platform: template
     name: "Screen Flip"
     id: screen_flip
@@ -511,9 +507,7 @@ lvgl:
   displays: [dial_lcd]
   touchscreens: [dial_touch]
   buffer_size: 25%    # ~29KB at 240x240x16bpp; comfortable without PSRAM
-  # Boot orientation, matching the Screen Flip switch's RESTORE_DEFAULT_ON. Setting it here (rather
-  # than only in the switch's action) avoids a frame of upside-down UI before the switch restores.
-  # It must live in the LVGL config, not the display's -- LVGL rejects a rotated display outright.
+  # Boot orientation, matching the Screen Flip switch's RESTORE_DEFAULT_ON.
   rotation: 180
   # Deliberately NO `encoders:` block. The knob is bound straight to the dimmer number above rather
   # than to LVGL's focus/edit model — on a two-screen appliance, "turn = dim" should hold no matter
