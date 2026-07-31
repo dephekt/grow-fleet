@@ -57,7 +57,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 1a668c0abca54137ed67dc78bfd564ca34110338
+      ref: 8465f8d8ebb3911ee1f863140d7cd3ccac84ddf9
       path: .
     components:
       - mlx90640
