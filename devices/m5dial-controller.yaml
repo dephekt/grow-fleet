@@ -217,6 +217,7 @@ mqtt:
             "entities": [
               { "component": "number", "objectId": "grow_light_brightness", "group": "grow_light", "role": "quick-control", "order": 10, "label": "Brightness" },
               { "component": "light", "objectId": "screen_backlight", "group": "display", "order": 10, "label": "Screen Backlight" },
+              { "component": "switch", "objectId": "screen_flip", "group": "display", "order": 20, "label": "Flip Screen" },
               { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 },
               { "component": "button", "objectId": "check_firmware_update", "group": "diagnostics", "order": 5 },
               { "component": "sensor", "objectId": "wifi_signal", "group": "diagnostics", "order": 10 },
@@ -457,6 +458,23 @@ number:
           id: dim_label
           text: !lambda 'return std::to_string((int) x) + "%";'
 
+switch:
+  # The Dial hangs from its USB cable in the tent, so it reads upside down. There is no IMU on this
+  # board (the BSP sets BSP_CAPS_IMU 0, and the I2C scan finds only touch, RTC and RFID), so the
+  # orientation cannot be detected -- it has to be a setting. LVGL rotates the touch coordinates
+  # along with the framebuffer, so the tile swipe follows the flip.
+  - platform: template
+    name: "Screen Flip"
+    id: screen_flip
+    icon: mdi:phone-rotate-landscape
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lvgl.display.set_rotation: 180
+    on_turn_off:
+      - lvgl.display.set_rotation: 0
+
 button:
   - platform: restart
     name: "Restart"
@@ -493,6 +511,10 @@ lvgl:
   displays: [dial_lcd]
   touchscreens: [dial_touch]
   buffer_size: 25%    # ~29KB at 240x240x16bpp; comfortable without PSRAM
+  # Boot orientation, matching the Screen Flip switch's RESTORE_DEFAULT_ON. Setting it here (rather
+  # than only in the switch's action) avoids a frame of upside-down UI before the switch restores.
+  # It must live in the LVGL config, not the display's -- LVGL rejects a rotated display outright.
+  rotation: 180
   # Deliberately NO `encoders:` block. The knob is bound straight to the dimmer number above rather
   # than to LVGL's focus/edit model — on a two-screen appliance, "turn = dim" should hold no matter
   # which widget LVGL thinks is focused.
