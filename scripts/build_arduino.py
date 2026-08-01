@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
 """Build, package, and publish Arduino (non-ESPHome) fleet firmware.
 
 Parallel to compile_devices.py + package_device.py + publish_packages.py for

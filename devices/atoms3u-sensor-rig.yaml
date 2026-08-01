@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
 # Headless AtomS3U bench rig — exercises the grow-monitor SENSOR pipeline.
 # No display (that lives on the CoreS3 via grow_env_monitor); this node just
 # reads sensors and serves them over the web/API + the thermal JPEG endpoint.

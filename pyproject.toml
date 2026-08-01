@@ -2,6 +2,9 @@
 name = "grow-fleet"
 version = "0.1.0"
 requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Daniel Snider", email = "dan@dephekt.net" }]
 dependencies = [
     "PyYAML>=6.0.2",
 ]

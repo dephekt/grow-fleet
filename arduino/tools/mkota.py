@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
 """Convert a compiled Arduino .bin to the .ota format the R4 WiFi OTAUpdate library
 expects. Stdlib-only (zlib.crc32 == Arduino's crccheck Crc32). Format:
   [len u32 LE][crc32 u32 LE] over: [magic u32 LE][version 8B][payload]

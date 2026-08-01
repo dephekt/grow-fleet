@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
 # M5Stack Dial grow-light controller — the dimmer, with a live "dial it in" readout.
 #
 # Two swipeable screens on the round 240x240 panel:

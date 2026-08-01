@@ -60,3 +60,30 @@ cache to reuse downloaded platforms, packages, and toolchains between runs.
 They do not cache `devices/.esphome/build`: protected firmware builds embed
 site secrets in the compiled binaries. Private GHCR OCI artifacts are the
 durable release output.
+
+## License
+
+Copyright (c) 2026 Daniel Snider.
+
+Licensed under the **GNU Affero General Public License, version 3 or later**
+(AGPL-3.0-or-later). The full text is in [LICENSE](LICENSE). Contributions
+require an explicit license grant beyond the AGPL — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Third-party code
+
+| Path | Origin | License |
+|---|---|---|
+| `arduino/tools/lzss.c` | Haruhiko Okumura's LZSS codec, redistributed by Arduino | Public domain |
+| `arduino/tools/lzss.py` | Arduino OTA tooling | Unresolved — no upstream header |
+| `arduino/tools/bin2ota.py` | Arduino OTA tooling | Unresolved — no upstream header |
+
+These files are **excluded** from this repository's AGPL grant and retain their
+own terms. See [`arduino/tools/README.md`](arduino/tools/README.md) for detail
+and for how to drop the unresolved dependency. Everything else in `arduino/`,
+including `mkota.py`, is original work under the AGPL.
+
+The ESPHome components these device configs pull in live in
+[`dephekt/esphome-components`](https://github.com/dephekt/esphome-components)
+under a dual GPL-3.0-or-later / MIT license. Device YAMLs reference those
+components rather than deriving from them, so the two licenses do not interact.

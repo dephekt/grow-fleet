@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
 """Build and package a Go publisher daemon into the shape publish_packages.py pushes.
 
 Sibling to package_device.py (ESPHome firmware) and build_arduino.py (Arduino
