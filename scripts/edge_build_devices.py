@@ -31,6 +31,18 @@ def commit_exists(ref: str) -> bool:
     return completed.returncode == 0
 
 
+def shares_history(base: str, head: str) -> bool:
+    # `git merge-base` exits non-zero when the two commits have no common
+    # ancestor, which is also what makes `git diff base...head` fail.
+    completed = subprocess.run(
+        ["git", "merge-base", base, head],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return completed.returncode == 0
+
+
 def latest_edge_manifest(
     device: str,
     registry: str = DEFAULT_OCI_REGISTRY,
@@ -95,6 +107,13 @@ def should_build_device(
     if not commit_exists(source_sha):
         print(
             f"::notice::Building {device}: previous source commit {source_sha} is unavailable",
+            file=sys.stderr,
+        )
+        return True
+    if not shares_history(source_sha, head):
+        print(
+            f"::notice::Building {device}: previous source commit {source_sha} "
+            f"shares no history with {head}",
             file=sys.stderr,
         )
         return True

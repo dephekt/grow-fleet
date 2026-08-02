@@ -528,6 +528,7 @@ class FirmwarePackagingTests(unittest.TestCase):
         with (
             mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
             mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.shares_history", return_value=True),
             mock.patch(
                 "edge_build_devices.changed_paths", return_value=["devices/atoms3u-sensor-rig.yaml"]
             ) as changed,
@@ -542,6 +543,7 @@ class FirmwarePackagingTests(unittest.TestCase):
         with (
             mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
             mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.shares_history", return_value=True),
             mock.patch(
                 "edge_build_devices.changed_paths", return_value=[".github/workflows/firmware.yml"]
             ),
@@ -553,6 +555,7 @@ class FirmwarePackagingTests(unittest.TestCase):
         with (
             mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
             mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.shares_history", return_value=True),
             mock.patch("edge_build_devices.changed_paths", return_value=["README.md"]),
         ):
             self.assertEqual(edge_build_devices("HEAD"), [])
@@ -562,11 +565,23 @@ class FirmwarePackagingTests(unittest.TestCase):
         with (
             mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
             mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.shares_history", return_value=True),
             mock.patch(
                 "edge_build_devices.changed_paths", return_value=["scripts/publish_packages.py"]
             ),
         ):
             self.assertEqual(edge_build_devices("HEAD"), [])
+
+    def test_edge_build_devices_is_conservative_without_shared_history(self) -> None:
+        manifest = {"source_sha": "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"}
+        with (
+            mock.patch("edge_build_devices.latest_edge_manifest", return_value=manifest),
+            mock.patch("edge_build_devices.commit_exists", return_value=True),
+            mock.patch("edge_build_devices.shares_history", return_value=False),
+            mock.patch("edge_build_devices.changed_paths") as changed,
+        ):
+            self.assertTrue(should_build_device("atoms3u-sensor-rig", "HEAD"))
+        changed.assert_not_called()
 
     def test_edge_build_devices_is_conservative_for_unreadable_manifest(self) -> None:
         with mock.patch(
