@@ -232,34 +232,20 @@ mqtt:
     # grow-app merges every device's _lights fragment by light id, so the Main Light card pulls
     # on/off + schedule + power from the Athom plug and this dimmer from here.
     #
-    # CUTOVER WARNING: mergedLights() merges fragments in nodeId-ALPHABETICAL order, last write wins
-    # per role. "atoms3u-sensor-rig" sorts before "m5dial-controller", so while both publish a
-    # dimmer for id:"main" this node silently wins. Do NOT rely on that — reflash atoms3u with its
-    # dimmer role removed. The join is stitched only by a matching "id":"main" + this schema
-    # version; change either on one node only and grow-app drops the dimmer with no error anywhere.
-    #
-    # ============================ DISABLED UNTIL CUTOVER ============================
-    # Publishing this claims the dimmer role for id:"main" the instant this node connects, and
-    # because the merge is alphabetical-last-wins, "m5dial-controller" BEATS "atoms3u-sensor-rig".
-    # While this node's DAC is not yet wired to the SF4000, enabling it would point grow-app's
-    # brightness control at an unconnected DAC and strand the real fixture at whatever voltage the
-    # AtomS3U last set. So it stays commented out through bring-up.
-    #
-    # Enable at Phase 4 step 4 — AFTER atoms3u has been reflashed without its dimmer role and the
-    # RJ-11 has been moved to this node's V0/G.
-    # - mqtt.publish:
-    #     topic: grow/daniel-home/${devicename}/_lights/config
-    #     retain: true
-    #     qos: 1
-    #     payload: |-
-    #       {
-    #         "schema": "grow-lights.v1",
-    #         "nodeId": "${devicename}",
-    #         "lights": [
-    #           { "id": "main", "roles": { "dimmer": "grow_light_brightness" } }
-    #         ]
-    #       }
-    # ===============================================================================
+    # The join is stitched only by a matching "id":"main" and schema version; change either here
+    # without changing the plug's fragment and grow-app drops the dimmer with no error anywhere.
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_lights/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-lights.v1",
+            "nodeId": "${devicename}",
+            "lights": [
+              { "id": "main", "roles": { "dimmer": "grow_light_brightness" } }
+            ]
+          }
 
 i2c:
   # Internal bus: FT3267 touch @0x38, BM8563 RTC @0x51, WS1850S RFID @0x28
