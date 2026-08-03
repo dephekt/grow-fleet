@@ -62,7 +62,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 8465f8d8ebb3911ee1f863140d7cd3ccac84ddf9
+      ref: 0926abf947d3cba3c43d1bf1d29de7bc054767cd
       path: .
     components:
       - scd4x_stats
