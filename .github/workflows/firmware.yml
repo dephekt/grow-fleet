@@ -5,6 +5,11 @@ env:
   OCI_REGISTRY: ghcr.io
   OCI_OWNER: dephekt
   OCI_PACKAGE_PREFIX: grow-fleet
+  # Stamps org.opencontainers.image.source, which is what makes GHCR show the
+  # package under the repository. Set at workflow level rather than per-step so
+  # both the edge and release publishes carry it; arduino-firmware.yml and
+  # publisher.yml set the same value on their single publish step each.
+  OCI_SOURCE_URL: https://github.com/${{ github.repository }}
 
 on:
   pull_request:
