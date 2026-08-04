@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdi12"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/substrate"
@@ -165,5 +166,37 @@ func TestPollSubstrateStopsOnCancellation(t *testing.T) {
 
 	if guest.reads != 0 {
 		t.Errorf("polled %d times after cancellation, want 0", guest.reads)
+	}
+}
+
+// A substrate cycle is legitimately longer than a PAR-only one — measured on
+// quantum-sensor: ~0.6 s becomes ~2.4 s against a 2 s interval — so it must not
+// be reported as drift. Because noteOverrun is edge-triggered, an unexempted
+// substrate cycle flip-flops the start/stop edges at the substrate cadence and
+// floods the journal with a WARN plus an INFO every subdivision.
+func TestSubstrateCycleIsNotReportedAsDrift(t *testing.T) {
+	r := newRig(t, withJournal(t))
+	r.App.deps.Substrate = newTestRunner(t)
+	r.App.cfg.SubstrateEvery = 1
+
+	guest := &countingMeasurer{}
+	s := &busSession{Session: newHealthySession(), guest: guest}
+	st := &pollState{}
+
+	// A cycle that polled the probes and overran.
+	r.App.pollSubstrate(context.Background(), s, st)
+	r.App.noteOverrun(st, 1, 2*time.Second)
+
+	if n := r.journal.count("overran its boundary"); n != 0 {
+		t.Errorf("a substrate cycle was logged as drift %d times; at the deployed cadence this floods the journal", n)
+	}
+	if st.overrunning {
+		t.Error("an exempt cycle must not arm the overrun edge, or the next clean cycle logs a spurious recovery")
+	}
+
+	// Drift on a PAR-only cycle must still be reported.
+	r.App.noteOverrun(st, 1, 2*time.Second)
+	if n := r.journal.count("overran its boundary"); n != 1 {
+		t.Errorf("real drift on a non-substrate cycle warned %d times, want 1", n)
 	}
 }

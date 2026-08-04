@@ -86,6 +86,10 @@ type pollState struct {
 	// state: a reopen restarting the count is harmless, and at worst delays one
 	// substrate read by a few seconds.
 	substrateCycles int
+	// substratePolled records that the cycle just finished included a substrate
+	// read, so the scheduler can tell intended extra work from drift. Set by
+	// pollSubstrate and cleared by noteOverrun, which is the only reader.
+	substratePolled bool
 	// soft counts consecutive failures blamed on a malformed frame or silence
 	// — neither of which implicates the descriptor — and escalates to a reopen
 	// once the adapter has clearly stopped being merely unlucky.
@@ -304,7 +308,30 @@ func nextBoundary(prev time.Time, interval time.Duration, now time.Time) (time.T
 // between. A cycle that keeps missing its boundary would otherwise emit a line
 // every interval forever — the same defect as the Python's "no reading for
 // tilt" every 10 s, which was as much a logging fault as a protocol one.
+//
+// A cycle that polled the substrate probes is exempt, and the edge-triggering
+// above is exactly why it has to be. Measured on quantum-sensor: a PAR-only
+// cycle takes ~0.6 s, a TEROS read adds ~1.8 s, and the deployed interval is
+// 2 s — so at SUBSTRATE_EVERY=15 the loop overruns once, recovers for fourteen
+// cycles, then overruns again. That flip-flops the start/stop edges every
+// thirty seconds and produces a WARN plus an INFO each time, roughly 2,700
+// lines a day, which is the very flooding this function exists to prevent.
+//
+// Skipping a boundary here is also correct rather than merely tolerable: the
+// scheduler skips ahead instead of drifting, one PPFD sample in fifteen is
+// missed, and dli integrates the measured dt between samples rather than
+// assuming a fixed spacing, so the DLI is unaffected. Genuine drift still
+// surfaces, because it would show on the other fourteen cycles too.
 func (a *App) noteOverrun(st *pollState, skipped int, elapsed time.Duration) {
+	if st.substratePolled {
+		st.substratePolled = false
+		if skipped > 0 {
+			a.log.Debug("substrate cycle ran long, as expected",
+				"skipped_boundaries", skipped, "cycle_elapsed", elapsed,
+				"interval", a.cfg.PollInterval)
+			return
+		}
+	}
 	switch {
 	case skipped > 0 && !st.overrunning:
 		st.overrunning = true
@@ -666,6 +693,7 @@ func (a *App) pollSubstrate(ctx context.Context, s Session, st *pollState) {
 	}
 	st.substrateCycles = 0
 
+	st.substratePolled = true
 	a.deps.Substrate.Poll(ctx, bus.At)
 }
 
