@@ -42,6 +42,7 @@ import (
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/mqttpub"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdnotify"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/serialport"
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/substrate"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/timezone"
 )
 
@@ -227,9 +228,41 @@ func serve(ctx context.Context, cfg config.Config, dialer app.Dialer, log *slog.
 		return err
 	}
 
+	// The substrate probes share the SDI-12 bus, so they share this process —
+	// but nothing above the wire. Each gets its own MQTT connection, because a
+	// CONNECT registers exactly one will and per-probe availability is the whole
+	// point of giving each probe its own device.
+	//
+	// cfg.Probes() cannot fail here: Load already parsed the same spec and would
+	// have refused to start. It is handled rather than ignored so a hand-built
+	// Config in some future caller does not turn a typo into a panic.
+	probes, err := cfg.Probes()
+	if err != nil {
+		return err
+	}
+	soil, err := substrate.NewRunner(cfg.TopicPrefix, probes, func(nodeID, statusTopic string) (substrate.Publisher, error) {
+		return mqttpub.New(mqttpub.Config{
+			Host:            cfg.MQTTHost,
+			Port:            cfg.MQTTPort,
+			Username:        cfg.MQTTUsername,
+			Password:        cfg.MQTTPassword,
+			NodeID:          nodeID,
+			StatusTopic:     statusTopic,
+			ShutdownTimeout: cfg.ShutdownTimeout,
+			Logger:          log,
+		})
+	}, log)
+	if err != nil {
+		return err
+	}
+	if ids := soil.NodeIDs(); len(ids) > 0 {
+		log.Info("substrate probes configured", "nodes", ids, "every_cycles", cfg.SubstrateEvery)
+	}
+
 	a, err := app.New(cfg, app.Deps{
 		Dialer:     dialer,
 		Publisher:  pub,
+		Substrate:  soil,
 		Notifier:   sdnotify.New(),
 		Zones:      zones,
 		Integrator: integrator,

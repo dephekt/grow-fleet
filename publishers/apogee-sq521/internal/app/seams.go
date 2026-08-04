@@ -6,6 +6,7 @@ import (
 
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/dli"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdi12"
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/substrate"
 )
 
 // The seams. Everything this package needs from the outside world is one of the
@@ -58,6 +59,25 @@ type Session interface {
 
 	// String names the device for the journal, e.g. "<by-id link> -> /dev/ttyUSB0".
 	String() string
+}
+
+// BusSession is a Session whose port is shared with other sensors on the same
+// SDI-12 bus, and which can hand out a conversation addressed to one of them.
+//
+// It is deliberately a separate, optional interface rather than a method on
+// Session. Only the production serialSession can honestly implement it — a
+// guest client must share the real descriptor, because two masters cannot own
+// one bus — so requiring it of every Session would force every test double to
+// fake a capability it has no port to back. A Session that does not implement
+// it is simply never asked, and the substrate runner stays dormant.
+type BusSession interface {
+	Session
+
+	// At returns a conversation addressed to another sensor on this bus. The
+	// caller must use it from the same goroutine that polls the primary sensor:
+	// SDI-12 has an unsolicited-transmit window between a measurement header and
+	// its data command, so overlapping transactions collide on the wire.
+	At(addr byte) substrate.Measurer
 }
 
 // Dialer opens a Session. It is called for the first open and again after every
