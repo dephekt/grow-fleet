@@ -12,6 +12,7 @@ import (
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/config"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdi12"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/serialport"
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/substrate"
 )
 
 // This is the only file in the package that touches the OS, which is why it
@@ -80,9 +81,12 @@ func (d *SerialDialer) Dial(ctx context.Context) (Session, error) {
 		return nil, fmt.Errorf("app: dial %s: %w", d.Path, err)
 	}
 	s := &serialSession{
-		Client: sdi12.New(port, d.Address, d.ReadTimeout, d.WriteTimeout),
-		port:   port,
-		closed: make(chan struct{}),
+		Client:       sdi12.New(port, d.Address, d.ReadTimeout, d.WriteTimeout),
+		port:         port,
+		closed:       make(chan struct{}),
+		readTimeout:  d.ReadTimeout,
+		writeTimeout: d.WriteTimeout,
+		guests:       map[byte]*sdi12.Client{},
 	}
 	go s.watch(ctx)
 	return s, nil
@@ -102,6 +106,42 @@ type serialSession struct {
 	// lifetime is bounded by the shorter of "this session" and "this process".
 	closed    chan struct{}
 	closeOnce sync.Once
+
+	// readTimeout and writeTimeout are retained so guest clients can be built
+	// with the same bounds as the primary one.
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+
+	// guests are clients for other addresses on this bus, keyed by address.
+	//
+	// They are cached rather than built per call because an sdi12.Client owns a
+	// LineReader holding bytes framed off the port; a fresh client each poll
+	// would discard that framing state mid-stream, which is the desync the
+	// session abstraction exists to prevent. Caching also ties their lifetime to
+	// the port's, so a reopen replaces every client together.
+	//
+	// No mutex: the poll goroutine is the sole owner of the port and therefore
+	// the only caller of At, which is the same invariant that lets the primary
+	// Client be used without one.
+	guests map[byte]*sdi12.Client
+}
+
+// At returns a client for another sensor on this same bus, sharing this
+// session's open descriptor.
+//
+// One descriptor is not a limitation to work around here, it is the constraint
+// the whole design follows from: SDI-12 gives the sensor an unsolicited-transmit
+// window between a measurement header and its data command, so a second master
+// on the wire would collide during that window no matter how carefully the fd
+// were locked. Guests therefore share this session and are polled from the same
+// goroutine, which makes transactions strictly sequential by construction.
+func (s *serialSession) At(addr byte) substrate.Measurer {
+	if c, ok := s.guests[addr]; ok {
+		return c
+	}
+	c := sdi12.New(s.port, addr, s.readTimeout, s.writeTimeout)
+	s.guests[addr] = c
+	return c
 }
 
 // watch shortens the port's deadline the moment ctx is cancelled.

@@ -96,6 +96,7 @@ import (
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/config"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/dli"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/entities"
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/substrate"
 )
 
 // The device block, byte-identical to the Python's DEVICE dict. grow-app groups
@@ -177,6 +178,12 @@ type Deps struct {
 	// Rollovers is the sink handed to dli.Config.OnRollover at construction.
 	// See RolloverSink for why the events cannot be published from the handler.
 	Rollovers *RolloverSink
+
+	// Substrate polls the METER TEROS probes sharing the SDI-12 bus. Optional:
+	// a nil Runner is inert on every entry point, which is how the daemon runs
+	// when SUBSTRATE_PROBES is unset — no publisher, no address polled, and no
+	// behaviour change of any kind.
+	Substrate *substrate.Runner
 
 	// Clock is optional; nil selects the real one.
 	Clock Clock
@@ -525,6 +532,11 @@ func (a *App) Run(ctx context.Context) error {
 			"topic", a.timeZoneCommandTopic(), "error", err)
 	}
 
+	// Substrate publishers dial in the background exactly as the PAR one does,
+	// so this does not block on a broker being reachable.
+	if err := a.deps.Substrate.Start(ctx); err != nil {
+		return err
+	}
 	if err := a.deps.Publisher.Start(ctx); err != nil {
 		return fmt.Errorf("%w: start mqtt: %w", ErrStartup, err)
 	}
@@ -579,6 +591,9 @@ func (a *App) Run(ctx context.Context) error {
 	// mqttpub owns the WithoutCancel and the 0x04 reason code; ctx is already
 	// cancelled here and passing it is correct — Shutdown uses it for values
 	// only.
+	// Drained before the PAR publisher so the probes' retained "offline" is on
+	// the broker while this process still has a connection to send it over.
+	a.deps.Substrate.Shutdown(ctx)
 	if err := a.deps.Publisher.Shutdown(ctx, a.topics.Status()); err != nil {
 		errs = append(errs, err)
 	}

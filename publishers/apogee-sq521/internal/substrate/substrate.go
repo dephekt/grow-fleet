@@ -20,6 +20,7 @@ package substrate
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/entities"
 )
@@ -64,6 +65,57 @@ const (
 // microsiemensPerMillisiemens converts the sensor's native µS/cm to published
 // mS/cm.
 const microsiemensPerMillisiemens = 1000.0
+
+// ParseProbes reads the SUBSTRATE_PROBES specification: a comma-separated list
+// of probes, each either a bare SDI-12 address or "address:node-id".
+//
+//	"A"                        -> address 'A', node id "substrate-a"
+//	"A:substrate-a,B:tent-2"   -> two probes, explicit node ids
+//
+// The bare form exists because the derived node id is what anyone would have
+// typed anyway, and a defaulted id cannot be typo'd into a second device that
+// silently registers alongside the first.
+//
+// An empty spec yields no probes and no error: that is how the daemon runs when
+// no substrate hardware is fitted.
+func ParseProbes(spec string) ([]Probe, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+	var out []Probe
+	for field := range strings.SplitSeq(spec, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		addrPart, nodeID, explicit := strings.Cut(field, ":")
+		addrPart = strings.TrimSpace(addrPart)
+		if len(addrPart) != 1 {
+			return nil, fmt.Errorf(
+				"substrate: probe %q: the address must be exactly one character from [0-9a-zA-Z]", field)
+		}
+		addr := addrPart[0]
+		if explicit {
+			nodeID = strings.TrimSpace(nodeID)
+		} else {
+			nodeID = DefaultNodeID(addr)
+		}
+		p := Probe{Address: addr, NodeID: nodeID}
+		if err := p.Validate(); err != nil {
+			return nil, fmt.Errorf("substrate: probe %q: %w", field, err)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// DefaultNodeID is the node id a bare address implies: "substrate-a" for 'A'.
+// Lower-cased because MQTT topics elsewhere in this fleet are lower-case, and a
+// node id is a topic segment.
+func DefaultNodeID(addr byte) string {
+	return "substrate-" + strings.ToLower(string(addr))
+}
 
 // Probe is one TEROS on the bus: where to find it, and who it is on MQTT.
 type Probe struct {

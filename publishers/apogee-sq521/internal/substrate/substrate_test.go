@@ -167,3 +167,69 @@ func TestEveryEntityRendersDiscovery(t *testing.T) {
 		}
 	}
 }
+
+func TestParseProbes(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    string
+		want    []Probe
+		wantErr string
+	}{
+		{name: "empty means no substrate hardware", spec: "", want: nil},
+		{name: "whitespace only", spec: "   ", want: nil},
+		{
+			name: "bare address derives the node id",
+			spec: "A",
+			want: []Probe{{Address: 'A', NodeID: "substrate-a"}},
+		},
+		{
+			name: "explicit node id",
+			spec: "A:tent-2-pot-1",
+			want: []Probe{{Address: 'A', NodeID: "tent-2-pot-1"}},
+		},
+		{
+			name: "several, with whitespace",
+			spec: " A , B:tent-2 ,C ",
+			want: []Probe{
+				{Address: 'A', NodeID: "substrate-a"},
+				{Address: 'B', NodeID: "tent-2"},
+				{Address: 'C', NodeID: "substrate-c"},
+			},
+		},
+		{name: "multi-character address", spec: "AB", wantErr: "exactly one character"},
+		{name: "empty address", spec: ":substrate-a", wantErr: "exactly one character"},
+		{name: "illegal address", spec: "!:substrate-a", wantErr: "one character"},
+		{name: "underscored node id", spec: "A:substrate_a", wantErr: "must use '-' not '_'"},
+		{name: "empty explicit node id", spec: "A:", wantErr: "no node id"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseProbes(tc.spec)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("got (%v, %v), want an error mentioning %q", got, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseProbes(%q): %v", tc.spec, err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d probes, want %d: %v", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("probe %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultNodeIDIsLowerCase(t *testing.T) {
+	// Node ids are topic segments, and every other topic in this fleet is
+	// lower-case.
+	if got := DefaultNodeID('A'); got != "substrate-a" {
+		t.Errorf("DefaultNodeID('A') = %q, want substrate-a", got)
+	}
+}

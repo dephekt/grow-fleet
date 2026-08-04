@@ -52,6 +52,7 @@ func TestLoadDefaults(t *testing.T) {
 		OfflineAfter:    3,
 		ShutdownTimeout: 3 * time.Second,
 		StateDir:        "",
+		SubstrateEvery:  15,
 	}
 	if got != want {
 		t.Errorf("Load() with defaults =\n%+v\nwant\n%+v", got, want)
@@ -101,6 +102,7 @@ func TestLoadOverrides(t *testing.T) {
 		OfflineAfter:    10,
 		ShutdownTimeout: 1500 * time.Millisecond,
 		StateDir:        "/var/lib/apogee-sq521",
+		SubstrateEvery:  15,
 	}
 	if got != want {
 		t.Errorf("Load() with overrides =\n%+v\nwant\n%+v", got, want)
@@ -736,7 +738,7 @@ func TestStringListsEveryField(t *testing.T) {
 	}
 
 	out := cfg.String()
-	if got, want := len(strings.Split(out, "\n")), 15; got != want {
+	if got, want := len(strings.Split(out, "\n")), 17; got != want {
 		t.Errorf("String() rendered %d lines, want %d (one per field):\n%s", got, want, out)
 	}
 
@@ -756,6 +758,8 @@ func TestStringListsEveryField(t *testing.T) {
 		"OfflineAfter", envOfflineAfter, "3",
 		"ShutdownTimeout", envShutdownTimeout, "3s",
 		"StateDir", envStateDir, "/var/lib/apogee-sq521",
+		"SubstrateSpec", envSubstrate, "no substrate probes",
+		"SubstrateEvery", envSubstrateEvery, "15",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(out, want) {

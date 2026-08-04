@@ -43,6 +43,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/substrate"
 )
 
 // Environment variable names. Exported-by-convention as constants so tests and
@@ -63,6 +65,8 @@ const (
 	envOfflineAfter    = "OFFLINE_AFTER"
 	envShutdownTimeout = "SHUTDOWN_TIMEOUT"
 	envStateDir        = "STATE_DIRECTORY"
+	envSubstrate       = "SUBSTRATE_PROBES"
+	envSubstrateEvery  = "SUBSTRATE_EVERY"
 )
 
 // Defaults, held as strings so they flow through exactly the same parsing and
@@ -86,6 +90,8 @@ const (
 	defaultOfflineAfter    = "3"
 	defaultShutdownTimeout = "3"
 	defaultStateDir        = ""
+	defaultSubstrate       = ""
+	defaultSubstrateEvery  = "15"
 )
 
 // maxTCPPort is the largest valid TCP port number.
@@ -152,6 +158,41 @@ type Config struct {
 	// startup rather than failing, since the sensor is perfectly useful without
 	// it.
 	StateDir string
+
+	// SubstrateSpec describes the METER TEROS soil probes sharing the SDI-12 bus
+	// with the quantum sensor: a comma-separated list of "address" or
+	// "address:node-id" (see substrate.ParseProbes). Empty — the default —
+	// means no substrate hardware is fitted and the daemon behaves exactly as it
+	// did before the feature existed: no publisher is built, no address polled.
+	//
+	// They share this daemon rather than having their own because they share the
+	// adapter. One serial device means one file descriptor, and SDI-12 has an
+	// unsolicited-transmit window between a measurement header and its data
+	// command, so two masters would collide on the wire even with correct
+	// locking. The probes are still fully independent above that: their own
+	// devices, publishers, retained state and failure accounting.
+	//
+	// This holds the raw spec rather than []substrate.Probe so that Config stays
+	// comparable with ==, which the test suite relies on to assert whole
+	// configurations at once. Load still parses it — a malformed spec is a
+	// startup failure aggregated with every other config error, not something
+	// discovered later — and simply discards the result; Probes() re-parses for
+	// the caller that needs it.
+	SubstrateSpec string
+
+	// SubstrateEvery is how many poll cycles pass between substrate reads.
+	//
+	// The probes are polled on a subdivision rather than every cycle because
+	// water content moves over hours while PPFD moves over seconds, and each
+	// probe costs an SDI-12 transaction inside the PAR sensor's cycle budget.
+	// At the default POLL_SECONDS=2 the default 15 reads every 30 s.
+	SubstrateEvery int
+}
+
+// Probes returns the configured substrate probes. Load has already validated
+// the spec, so an error here means the Config was hand-built rather than loaded.
+func (c Config) Probes() ([]substrate.Probe, error) {
+	return substrate.ParseProbes(c.SubstrateSpec)
 }
 
 // PersistenceEnabled reports whether a state directory was provided.
@@ -179,6 +220,23 @@ func Load(getenv func(string) string) (Config, error) {
 	c.SDI12Address = l.str(envSDI12Address, defaultSDI12Address)
 	c.PPFDUnit = l.str(envPPFDUnit, defaultPPFDUnit)
 	c.StateDir = l.str(envStateDir, defaultStateDir)
+
+	// Substrate probes. An empty spec is the ordinary case — no soil hardware
+	// fitted — and yields no probes and no error, so the daemon behaves exactly
+	// as it did before this feature existed. The parse result is discarded: it
+	// is performed here only so a malformed spec joins the aggregated startup
+	// failure rather than surfacing later, and Probes() re-parses on demand.
+	c.SubstrateSpec = l.str(envSubstrate, defaultSubstrate)
+	if _, err := substrate.ParseProbes(c.SubstrateSpec); err != nil {
+		l.fail("%s %q: %s", envSubstrate, l.raw(envSubstrate, defaultSubstrate), err)
+	}
+	if n, ok := l.integer(envSubstrateEvery, defaultSubstrateEvery); ok {
+		c.SubstrateEvery = n
+		if n < 1 {
+			l.fail("%s %q: must be at least 1 (poll cycles between substrate reads)",
+				envSubstrateEvery, l.raw(envSubstrateEvery, defaultSubstrateEvery))
+		}
+	}
 
 	// Numeric fields: each helper records at most one error per variable, so a
 	// bad value never produces both a parse and a range complaint.
@@ -311,6 +369,21 @@ func (c Config) String() string {
 		stateDir = "<empty> (persistence disabled)"
 	}
 
+	// Render the parsed probes rather than the raw spec, so --check-config
+	// answers the question an operator actually has — which addresses will be
+	// polled and what each one is called on the bus — including when the spec
+	// used the bare-address form and the node ids were derived.
+	substrateSpec := "<empty> (no substrate probes)"
+	if probes, err := c.Probes(); err == nil && len(probes) > 0 {
+		parts := make([]string, 0, len(probes))
+		for _, p := range probes {
+			parts = append(parts, fmt.Sprintf("%c->%s", p.Address, p.NodeID))
+		}
+		substrateSpec = strings.Join(parts, ", ")
+	} else if err != nil {
+		substrateSpec = fmt.Sprintf("%q (INVALID: %s)", c.SubstrateSpec, err)
+	}
+
 	lines := []string{
 		field("NodeID", envNodeID, c.NodeID),
 		field("MQTTHost", envMQTTHost, c.MQTTHost),
@@ -327,6 +400,8 @@ func (c Config) String() string {
 		field("OfflineAfter", envOfflineAfter, c.OfflineAfter),
 		field("ShutdownTimeout", envShutdownTimeout, c.ShutdownTimeout),
 		field("StateDir", envStateDir, stateDir),
+		field("SubstrateSpec", envSubstrate, substrateSpec),
+		field("SubstrateEvery", envSubstrateEvery, c.SubstrateEvery),
 	}
 	return strings.Join(lines, "\n")
 }
