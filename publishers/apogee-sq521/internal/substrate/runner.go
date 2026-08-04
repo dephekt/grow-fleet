@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/entities"
 	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdi12"
@@ -62,14 +63,25 @@ type probeState struct {
 	dev    entities.Device
 	table  []entities.Entity
 
-	// born is whether discovery and the retained "online" have been published
-	// for this connection. Cleared on every connection-up, because a broker
-	// that lost us also lost whatever we believed was retained.
+	// born is whether discovery and the retained "online" have been published on
+	// the current connection. Written only by the poll goroutine.
 	born bool
+	// rebirth is set from mqttpub's connection-up goroutine and consumed by the
+	// poll goroutine. It exists so that goroutine touches nothing else: born,
+	// lastPayload and announced are plain fields owned by the poller, and having
+	// the callback write them directly was a data race that could also lose the
+	// re-announce entirely. The PAR side solves the same problem by serialising
+	// whole publish runs under App.seqMu; a hand-off flag is the cheaper answer
+	// here, because this runner has exactly one consumer.
+	rebirth atomic.Bool
 	// lastPayload is what this process last wrote to each state topic, so an
 	// unchanged value is not republished every cycle. The empty string is a
 	// meaningful entry: it records that the topic currently holds a blank.
 	lastPayload map[string]string
+	// announced is the object ids whose discovery config is on the broker for
+	// this connection. Optional entities are not in it until the probe has been
+	// seen to report them; see announceOptional.
+	announced map[string]bool
 	// failures counts consecutive failed polls; at offlineAfter the probe's
 	// retained availability flips.
 	failures int
@@ -118,10 +130,12 @@ func NewRunner(prefix string, probes []Probe, mk NewPublisher, log *slog.Logger)
 			dev:         p.Device("", ""),
 			table:       Entities(),
 			lastPayload: map[string]string{},
+			announced:   map[string]bool{},
 		}
 		// A reconnect invalidates everything we believed was retained, so the
 		// next poll re-announces rather than assuming the broker still holds it.
-		pub.OnConnectionUp(func() { ps.born = false })
+		// The flag is only raised here; the poll goroutine acts on it.
+		pub.OnConnectionUp(func() { ps.rebirth.Store(true) })
 		r.probes = append(r.probes, ps)
 	}
 	return r, nil
@@ -168,6 +182,18 @@ func (r *Runner) Poll(ctx context.Context, at func(addr byte) Measurer) {
 func (r *Runner) pollOne(ctx context.Context, ps *probeState, m Measurer) {
 	log := r.log.With("node_id", ps.probe.NodeID, "address", string(ps.probe.Address))
 
+	// mqttpub connects with CleanStart, so a broker we have just reconnected to
+	// holds none of our retained topics — not the discovery configs, not the
+	// serial, not a value that happens not to have changed since. Forgetting what
+	// we believe is on the broker is what makes the rebirth republish all of it;
+	// clearing only `born` would re-send discovery and "online" while
+	// publishState went on suppressing every unchanged value as already present.
+	if ps.rebirth.Swap(false) {
+		ps.born = false
+		clear(ps.lastPayload)
+		clear(ps.announced)
+	}
+
 	if !ps.born {
 		if err := r.birth(ctx, ps, m); err != nil {
 			log.Warn("could not announce the probe; retrying next cycle", "error", err)
@@ -182,6 +208,8 @@ func (r *Runner) pollOne(ctx context.Context, ps *probeState, m Measurer) {
 		r.recordFailure(ctx, ps, log)
 		return
 	}
+
+	r.announceOptional(ctx, ps, readings, log)
 
 	for _, rd := range readings {
 		e, ok := entityFor(ps.table, rd.ObjectID)
@@ -221,12 +249,16 @@ func (r *Runner) birth(ctx context.Context, ps *probeState, m Measurer) error {
 	}
 
 	for _, e := range ps.table {
-		payload, err := entities.DiscoveryPayload(e, ps.topics, ps.dev)
-		if err != nil {
-			return fmt.Errorf("discovery payload for %s: %w", e.ObjectID, err)
+		// An optional entity's capability is not known until the probe answers: a
+		// TEROS 11 has no EC electrode and returns two values, so announcing bulk
+		// EC here would leave a retained config whose state topic never fills —
+		// the defect the PAR daemon's probe-before-discovery rule exists to
+		// prevent. announceOptional publishes it once the probe reports it.
+		if e.Optional {
+			continue
 		}
-		if err := ps.pub.PublishRetained(ctx, ps.topics.Discovery(e.Component, e.ObjectID), payload); err != nil {
-			return fmt.Errorf("publish discovery for %s: %w", e.ObjectID, err)
+		if err := r.announce(ctx, ps, e); err != nil {
+			return err
 		}
 	}
 
@@ -242,6 +274,42 @@ func (r *Runner) birth(ctx context.Context, ps *probeState, m Measurer) error {
 	ps.offline = false
 	ps.born = true
 	return nil
+}
+
+// announce publishes one entity's retained discovery config and records it.
+func (r *Runner) announce(ctx context.Context, ps *probeState, e entities.Entity) error {
+	payload, err := entities.DiscoveryPayload(e, ps.topics, ps.dev)
+	if err != nil {
+		return fmt.Errorf("discovery payload for %s: %w", e.ObjectID, err)
+	}
+	if err := ps.pub.PublishRetained(ctx, ps.topics.Discovery(e.Component, e.ObjectID), payload); err != nil {
+		return fmt.Errorf("publish discovery for %s: %w", e.ObjectID, err)
+	}
+	ps.announced[e.ObjectID] = true
+	return nil
+}
+
+// announceOptional publishes discovery for optional entities this probe has now
+// been seen to report, which is the only evidence that it has the hardware.
+//
+// Called before the readings are published so a config always precedes the state
+// topic it resolves. A probe that never reports the value never gets the config,
+// which is the difference between "this sensor has no EC electrode" and "this
+// sensor's EC is unknown".
+func (r *Runner) announceOptional(ctx context.Context, ps *probeState, readings []Reading, log *slog.Logger) {
+	for _, rd := range readings {
+		e, ok := entityFor(ps.table, rd.ObjectID)
+		if !ok || !e.Optional || ps.announced[e.ObjectID] {
+			continue
+		}
+		if err := r.announce(ctx, ps, e); err != nil {
+			log.Warn("could not announce an optional entity; retrying next cycle",
+				"entity", e.ObjectID, "error", err)
+			continue
+		}
+		log.Info("probe reports an optional value; announced it",
+			"entity", e.ObjectID)
+	}
 }
 
 // publishState writes one entity's payload, skipping the write when the topic

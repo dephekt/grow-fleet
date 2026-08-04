@@ -233,3 +233,48 @@ func TestDefaultNodeIDIsLowerCase(t *testing.T) {
 		t.Errorf("DefaultNodeID('A') = %q, want substrate-a", got)
 	}
 }
+
+// The node id is interpolated straight into every topic this probe owns, so a
+// stray MQTT metacharacter does not produce a validation error at startup — it
+// produces a will and a status topic on some other hierarchy, or a wildcard the
+// broker rejects, and a probe that simply never appears.
+func TestValidateRejectsTopicMetacharactersInNodeID(t *testing.T) {
+	for _, bad := range []string{"substrate/a", "substrate+a", "substrate#a", "substrate a", "substrate\ta"} {
+		if err := (Probe{Address: 'A', NodeID: bad}).Validate(); err == nil {
+			t.Errorf("node id %q was accepted; it becomes a topic segment", bad)
+		}
+	}
+}
+
+func TestValidateAcceptsOrdinaryNodeIDs(t *testing.T) {
+	for _, ok := range []string{"substrate-a", "tent1", "tent-2.left", "SubstrateA"} {
+		if err := (Probe{Address: 'A', NodeID: ok}).Validate(); err != nil {
+			t.Errorf("node id %q was rejected: %v", ok, err)
+		}
+	}
+}
+
+// polledEntities is derived from Entities() rather than restating the mapping.
+// The serial is SourceStatic with a zero Index, which would alias raw counts if
+// the Kind filter were dropped.
+func TestPolledEntitiesComeFromTheEntityTable(t *testing.T) {
+	three := polledEntities(3)
+	if len(three) != 3 {
+		t.Fatalf("a 3-value response covers %d entities, want 3", len(three))
+	}
+	for _, e := range three {
+		if e.ObjectID == ObjectSerial {
+			t.Error("the serial is not a polled value and must not be indexed into the response")
+		}
+	}
+
+	two := polledEntities(2)
+	if len(two) != 2 {
+		t.Fatalf("a 2-value response (TEROS 11) covers %d entities, want 2", len(two))
+	}
+	for _, e := range two {
+		if e.ObjectID == ObjectBulkEC {
+			t.Error("bulk EC was indexed into a 2-value response")
+		}
+	}
+}

@@ -567,6 +567,13 @@ type measureResult struct {
 func (a *App) cycle(ctx context.Context, s Session, st *pollState) cycleOutcome {
 	a.beat()
 
+	// A cycle starts owing no drift exemption. noteOverrun consumes the flag on
+	// the normal path, but a cycle that ends in outcomeReopen returns from
+	// runSession before noteOverrun is ever reached — and pollState outlives the
+	// session, so a flag set by the last substrate poll before a port reopen
+	// would silently excuse the NEXT session's first genuine overrun.
+	st.substratePolled = false
+
 	// Sized from the sensor's conversion time, not from POLL_SECONDS. See
 	// maxConversionWait: a budget below ttt + 1 s does not merely truncate the
 	// wait, it makes sdi12 refuse the aD0! and every cycle fail.

@@ -10,7 +10,10 @@ import (
 )
 
 type fakePub struct {
-	last    map[string]string
+	last map[string]string
+	// seq is every topic published, in order, so a test can assert that a
+	// discovery config precedes the state topic it resolves.
+	seq     []string
 	writes  int
 	onUp    func()
 	started bool
@@ -23,6 +26,7 @@ func (p *fakePub) Start(context.Context) error { p.started = true; return nil }
 
 func (p *fakePub) PublishRetained(_ context.Context, topic string, payload []byte) error {
 	p.last[topic] = string(payload)
+	p.seq = append(p.seq, topic)
 	p.writes++
 	return nil
 }
@@ -81,7 +85,11 @@ func newHarness(t *testing.T, probes ...Probe) *harness {
 	}
 	h.run = r
 	for _, p := range probes {
-		h.meas[p.Address] = &fakeMeasurer{addr: p.Address, values: []float64{2852.7, 25.8, 24}}
+		h.meas[p.Address] = &fakeMeasurer{
+			addr:   p.Address,
+			values: []float64{2852.7, 25.8, 24},
+			ident:  sdi12.Identity{Vendor: "METER", Model: "TER12", Serial: "T12-000653" + string(p.Address)},
+		}
 	}
 	return h
 }
@@ -289,5 +297,153 @@ func TestIdentifyFailureIsNotFatal(t *testing.T) {
 	// A probe that measures but will not identify is still worth publishing.
 	if got := h.pubs["substrate-a"].last[h.topic("substrate-a", "/sensor/"+ObjectTemperature+"/state")]; got != "25.8" {
 		t.Errorf("temperature = %q, want the reading published despite identification failing", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reconnect. mqttpub connects with CleanStart, so a broker we reconnect to holds
+// none of our retained topics.
+// ---------------------------------------------------------------------------
+
+// The bug this covers: clearing only `born` re-sent discovery and "online" but
+// left lastPayload populated, so publishState went on suppressing every value
+// that happened not to have changed. The serial is the worst case — it is
+// written once at birth and never changes, so it stayed blank in grow-app for
+// the life of the connection.
+func TestReconnectRepublishesUnchangedValues(t *testing.T) {
+	h := newHarness(t, Probe{Address: 'A', NodeID: "substrate-a"})
+	h.poll()
+
+	pub := h.pubs["substrate-a"]
+	serialTopic := h.topic("substrate-a", "/sensor/"+ObjectSerial+"/state")
+	countsTopic := h.topic("substrate-a", "/sensor/"+ObjectRawCounts+"/state")
+	if pub.last[serialTopic] == "" {
+		t.Fatal("serial was never published on the first birth")
+	}
+
+	// The broker forgets everything, then we reconnect and poll again with the
+	// probe reporting exactly what it reported before.
+	clear(pub.last)
+	pub.onUp()
+	h.poll()
+
+	if got := pub.last[serialTopic]; got == "" {
+		t.Error("serial was not republished after a reconnect; it is static, so it never changes and would stay blank forever")
+	}
+	if got := pub.last[countsTopic]; got == "" {
+		t.Error("an unchanged reading was not republished after a reconnect")
+	}
+	if got := pub.last[h.topic("substrate-a", "/status")]; got != "online" {
+		t.Errorf("status after reconnect = %q, want online", got)
+	}
+	if got := pub.last[h.topic("substrate-a", "/_discovery/sensor/substrate-a/"+ObjectRawCounts+"/config")]; got == "" {
+		// Topic shape differs by prefix; assert discovery went out at all.
+		found := false
+		for topic := range pub.last {
+			if strings.Contains(topic, "config") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("no discovery config was republished after a reconnect")
+		}
+	}
+}
+
+// The connection-up callback runs on mqttpub's goroutine while the poll
+// goroutine owns every other field. Under -race this fails if the callback
+// writes born/lastPayload directly, as it used to.
+func TestReconnectCallbackIsRaceFreeAgainstPolling(t *testing.T) {
+	h := newHarness(t, Probe{Address: 'A', NodeID: "substrate-a"})
+	pub := h.pubs["substrate-a"]
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			pub.onUp()
+		}
+	}()
+	for range 200 {
+		h.poll()
+	}
+	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Optional entities. A TEROS 11 has no EC electrode and returns two values.
+// ---------------------------------------------------------------------------
+
+func discoveryTopics(pub *fakePub) []string {
+	var out []string
+	for topic := range pub.last {
+		if strings.Contains(topic, "/config") {
+			out = append(out, topic)
+		}
+	}
+	return out
+}
+
+// Announcing bulk EC for a probe that has no EC electrode leaves a retained
+// config whose state topic never fills — a permanently-unknown entity in
+// grow-app. The Optional flag existed for this and was never consulted.
+func TestTeros11NeverGetsABulkEcConfig(t *testing.T) {
+	h := newHarness(t, Probe{Address: 'A', NodeID: "substrate-a"})
+	h.meas['A'].values = []float64{2852.7, 25.8} // two values: a TEROS 11
+	h.poll()
+	h.poll()
+
+	pub := h.pubs["substrate-a"]
+	for _, topic := range discoveryTopics(pub) {
+		if strings.Contains(topic, ObjectBulkEC) {
+			t.Errorf("published a bulk-EC discovery config for a 2-value probe: %s", topic)
+		}
+	}
+	if len(discoveryTopics(pub)) == 0 {
+		t.Fatal("no discovery configs at all — the fixture is wrong, not the code")
+	}
+}
+
+func TestTeros12GetsABulkEcConfigOnceItReportsOne(t *testing.T) {
+	h := newHarness(t, Probe{Address: 'A', NodeID: "substrate-a"})
+	h.poll() // three values by default
+
+	pub := h.pubs["substrate-a"]
+	found := false
+	for _, topic := range discoveryTopics(pub) {
+		if strings.Contains(topic, ObjectBulkEC) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a probe that reported bulk EC never got its discovery config")
+	}
+}
+
+// Discovery must precede the state topic it resolves, including for the optional
+// row that is announced a beat later than the rest.
+func TestOptionalConfigPrecedesItsState(t *testing.T) {
+	h := newHarness(t, Probe{Address: 'A', NodeID: "substrate-a"})
+	h.poll()
+
+	pub := h.pubs["substrate-a"]
+	config, state := -1, -1
+	for i, topic := range pub.seq {
+		if !strings.Contains(topic, ObjectBulkEC) {
+			continue
+		}
+		if strings.Contains(topic, "/config") && config == -1 {
+			config = i
+		}
+		if strings.Contains(topic, "/state") && state == -1 {
+			state = i
+		}
+	}
+	if config == -1 || state == -1 {
+		t.Fatalf("expected both a config and a state publish for bulk EC, got config=%d state=%d", config, state)
+	}
+	if config > state {
+		t.Error("bulk EC's state was published before its discovery config; a subscriber would see a value for an entity it does not know")
 	}
 }

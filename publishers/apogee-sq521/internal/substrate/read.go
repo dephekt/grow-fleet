@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+
+	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/entities"
 )
 
 // Sensor error codes. METER returns these IN PLACE OF a measured value, and they
@@ -114,23 +116,20 @@ func readingsFrom(values []float64) ([]Reading, error) {
 
 // polledEntities returns the polled rows this response length covers, in index
 // order. A two-value response is a TEROS 11: bulk EC is absent rather than zero.
-func polledEntities(n int) []struct {
-	ObjectID string
-	Index    int
-} {
-	all := []struct {
-		ObjectID string
-		Index    int
-	}{
-		{ObjectRawCounts, idxRawCounts},
-		{ObjectTemperature, idxTemperature},
-		{ObjectBulkEC, idxBulkEC},
-	}
-	out := all[:0:0]
-	for _, e := range all {
-		if e.Index < n {
-			out = append(out, e)
+//
+// Derived from the entity table rather than restating it. This used to carry its
+// own object-id-to-index list, which made the Index field in Entities() dead at
+// runtime and meant a fourth polled value had to be added in two places that the
+// compiler would never cross-check.
+func polledEntities(n int) []entities.Entity {
+	var out []entities.Entity
+	for _, e := range Entities() {
+		// SourceStatic rows (the serial) have no index into the response at all,
+		// and their zero Index would otherwise alias raw counts.
+		if e.Kind != entities.SourcePolled || e.Index >= n {
+			continue
 		}
+		out = append(out, e)
 	}
 	return out
 }

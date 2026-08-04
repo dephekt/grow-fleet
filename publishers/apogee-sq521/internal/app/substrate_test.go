@@ -200,3 +200,29 @@ func TestSubstrateCycleIsNotReportedAsDrift(t *testing.T) {
 		t.Errorf("real drift on a non-substrate cycle warned %d times, want 1", n)
 	}
 }
+
+// A cycle that ends in outcomeReopen returns from runSession before noteOverrun
+// is reached, and pollState outlives the session — so a substrate exemption set
+// just before a port reopen used to leak into the next session and silently
+// excuse its first genuine overrun.
+func TestSubstrateExemptionDoesNotSurviveAReopen(t *testing.T) {
+	r := newRig(t, withJournal(t))
+	r.App.deps.Substrate = newTestRunner(t)
+	r.App.cfg.SubstrateEvery = 1
+
+	guest := &countingMeasurer{}
+	s := &busSession{Session: newHealthySession(), guest: guest}
+	st := &pollState{}
+
+	// A substrate cycle whose noteOverrun never runs (the reopen path).
+	r.App.pollSubstrate(context.Background(), s, st)
+	if !st.substratePolled {
+		t.Fatal("fixture: the substrate poll did not set the exemption")
+	}
+
+	// The next session's first cycle must start owing nothing.
+	r.App.cycle(context.Background(), newHealthySession(), st)
+	if st.substratePolled {
+		t.Error("the exemption survived into the next cycle; that cycle's first real overrun would go unreported")
+	}
+}

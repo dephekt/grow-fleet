@@ -142,11 +142,24 @@ func (p Probe) Validate() error {
 	if p.NodeID == "" {
 		return fmt.Errorf("substrate: probe at address %q has no node id", p.Address)
 	}
+	// The node id is interpolated straight into every topic this probe owns, so
+	// it is a topic SEGMENT, not a label. An allowlist rather than a blacklist of
+	// '/', '+' and '#': a stray one of those would silently move the will and the
+	// status topic onto another hierarchy, or make them a wildcard the broker
+	// rejects, and the operator would see a probe that simply never appears.
 	for i := 0; i < len(p.NodeID); i++ {
-		if p.NodeID[i] == '_' {
+		c := p.NodeID[i]
+		if c == '_' {
 			return fmt.Errorf(
 				"substrate: node id %q must use '-' not '_': grow-app collapses '-' to '_' when "+
 					"deriving entity ids, so both spellings would collide", p.NodeID)
+		}
+		alnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !alnum && c != '-' && c != '.' {
+			return fmt.Errorf(
+				"substrate: node id %q may only contain letters, digits, '-' and '.': it becomes an "+
+					"MQTT topic segment, and %q would make the path malformed or a wildcard",
+				p.NodeID, string(c))
 		}
 	}
 	return nil
@@ -238,8 +251,13 @@ func Entities() []entities.Entity {
 			PayloadPrecision: 3,
 			Kind:             entities.SourcePolled,
 			Index:            idxBulkEC,
-			// TEROS 11 omits electrical conductivity; capability is probed once
-			// rather than retried, exactly as the Apogee's tilt entity is.
+			// A TEROS 11 has no EC electrode at all and returns two values.
+			// Optional means the runner withholds this row's discovery config
+			// until the probe has actually reported the value, so an 11 never gets
+			// a retained config whose state topic cannot fill. Same principle as
+			// the Apogee's tilt entity, reached differently: that one probes up
+			// front and funnels through entities.EligibleSet, whereas a TEROS
+			// announces what it has by answering.
 			Optional: true,
 		},
 		{
