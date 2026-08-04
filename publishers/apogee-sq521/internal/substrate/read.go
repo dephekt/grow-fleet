@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-
-	"github.com/dephekt/grow-fleet/publishers/apogee-sq521/internal/sdi12"
 )
 
 // Sensor error codes. METER returns these IN PLACE OF a measured value, and they
@@ -72,10 +70,10 @@ type Reading struct {
 // means the transaction itself failed (no response, malformed framing, dead
 // port) and nothing is known about any field — that is the caller's failure
 // ladder, distinct from a sensor that answered with error codes.
-func Read(ctx context.Context, c *sdi12.Client) ([]Reading, error) {
-	values, err := c.Measure(ctx, "")
+func Read(ctx context.Context, m Measurer) ([]Reading, error) {
+	values, err := m.Measure(ctx, "")
 	if err != nil {
-		return nil, fmt.Errorf("substrate: %c M!: %w", c.Address(), err)
+		return nil, fmt.Errorf("substrate: %cM!: %w", m.Address(), err)
 	}
 	return readingsFrom(values)
 }
