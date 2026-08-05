@@ -77,39 +77,39 @@ mqtt:
     # declared as sensor here or grow-app never matches it.
     # KEEP THIS PAYLOAD UNDER ~2.8 KB: AsyncMqttClient drops any publish whose
     # whole packet exceeds the ESP8266 TCP send buffer (2 x TCP_MSS = 2920 B),
-    # and it fails silently — hence no pretty-printing and no label that only
-    # repeats the entity's own name.
+    # and it fails silently — hence grow-ui.v2's short keys, no pretty-printing,
+    # and no label that only repeats the entity's own name.
     - mqtt.publish:
         topic: grow/daniel-home/${devicename}/_ui/config
         retain: true
         qos: 1
         payload: |-
-          {"schema":"grow-ui.v1","nodeId":"${devicename}",
+          {"schema":"grow-ui.v2","nodeId":"${devicename}",
           "groups":[
-          {"id":"overview","title":"${friendlyname}","order":10,"variant":"metrics","surface":"dashboard","defaultOpen":true},
-          {"id":"controls","title":"Controls","order":20,"variant":"quick-controls","surface":"dashboard","defaultOpen":true},
-          {"id":"cycle","title":"Cycle Timer","order":30,"surface":"device-settings","deviceSettingsSection":"controls","defaultOpen":true},
-          {"id":"schedule","title":"Daily Window","order":40,"surface":"device-settings","deviceSettingsSection":"controls"},
-          {"id":"maintenance","title":"Maintenance","order":80,"surface":"device-settings","deviceSettingsSection":"maintenance"},
-          {"id":"diagnostics","title":"Diagnostics","order":90,"surface":"device-settings","deviceSettingsSection":"diagnostics"}],
+          {"i":"overview","t":"${friendlyname}","n":10,"v":"metrics","s":"dashboard","p":true},
+          {"i":"controls","t":"Controls","n":20,"v":"quick-controls","s":"dashboard","p":true},
+          {"i":"cycle","t":"Cycle Timer","n":30,"s":"device-settings","d":"controls","p":true},
+          {"i":"schedule","t":"Daily Window","n":40,"s":"device-settings","d":"controls"},
+          {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
+          {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
           "entities":[
-          {"component":"sensor","objectId":"fan_power","group":"overview","role":"metric","order":10},
-          {"component":"sensor","objectId":"voltage","group":"overview","role":"metric","order":20},
-          {"component":"sensor","objectId":"current","group":"overview","role":"metric","order":30},
-          {"component":"sensor","objectId":"total_daily_energy","group":"overview","role":"metric","order":40,"label":"Daily Energy"},
-          {"component":"switch","objectId":"exhaust_fan","group":"controls","role":"quick-control","order":10,"label":"Fan"},
-          {"component":"switch","objectId":"fan_cycle","group":"cycle","order":10,"label":"Cycle Armed"},
-          {"component":"number","objectId":"fan_cycle_run","group":"cycle","order":20,"label":"Run For (min)"},
-          {"component":"number","objectId":"fan_cycle_period","group":"cycle","order":30,"label":"Every (min)"},
-          {"component":"switch","objectId":"fan_schedule","group":"schedule","order":10,"label":"Window Armed"},
-          {"component":"time","objectId":"fan_on_time","group":"schedule","order":20,"label":"On Time"},
-          {"component":"time","objectId":"fan_off_time","group":"schedule","order":30,"label":"Off Time"},
-          {"component":"text","objectId":"time_zone","group":"schedule","order":40,"label":"Time Zone (POSIX)"},
-          {"component":"button","objectId":"check_firmware_update","group":"maintenance","order":10},
-          {"component":"button","objectId":"restart","group":"maintenance","order":20},
-          {"component":"sensor","objectId":"wifi_signal","group":"diagnostics","order":10},
-          {"component":"sensor","objectId":"uptime","group":"diagnostics","order":20},
-          {"component":"sensor","objectId":"ip_address","group":"diagnostics","order":30}]}
+          {"c":"sensor","o":"fan_power","g":"overview","r":"metric","n":10},
+          {"c":"sensor","o":"voltage","g":"overview","r":"metric","n":20},
+          {"c":"sensor","o":"current","g":"overview","r":"metric","n":30},
+          {"c":"sensor","o":"total_daily_energy","g":"overview","r":"metric","n":40,"l":"Daily Energy"},
+          {"c":"switch","o":"exhaust_fan","g":"controls","r":"quick-control","n":10,"l":"Fan"},
+          {"c":"switch","o":"fan_cycle","g":"cycle","n":10,"l":"Cycle Armed"},
+          {"c":"number","o":"fan_cycle_run","g":"cycle","n":20,"l":"Run For (min)"},
+          {"c":"number","o":"fan_cycle_period","g":"cycle","n":30,"l":"Every (min)"},
+          {"c":"switch","o":"fan_schedule","g":"schedule","n":10,"l":"Window Armed"},
+          {"c":"time","o":"fan_on_time","g":"schedule","n":20,"l":"On Time"},
+          {"c":"time","o":"fan_off_time","g":"schedule","n":30,"l":"Off Time"},
+          {"c":"text","o":"time_zone","g":"schedule","n":40,"l":"Time Zone (POSIX)"},
+          {"c":"button","o":"check_firmware_update","g":"maintenance","n":10},
+          {"c":"button","o":"restart","g":"maintenance","n":20},
+          {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
+          {"c":"sensor","o":"uptime","g":"diagnostics","n":20},
+          {"c":"sensor","o":"ip_address","g":"diagnostics","n":30}]}
 
 time:
   - id: !extend sntp_time
