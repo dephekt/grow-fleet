@@ -58,6 +58,12 @@ V2_ENTITY_KEYS = {"c", "o", "g", "n", "r", "l"}
 # which is exactly how the spectrometer sat on v1 unnoticed.
 UI_SOURCE_GLOBS = ("devices/*.yaml", "arduino/*/*.ino")
 
+# The JSON schema field itself, in both the plain YAML spelling and the
+# backslash-escaped one a C string literal uses. Matching bare "grow-ui.vN"
+# anywhere in the text would also flag prose that merely mentions the old
+# encoding, so the version is read from the declaration rather than the file.
+SCHEMA_DECLARATION = re.compile(r'schema\\?"\s*:\s*\\?"(grow-ui\.v\d+)')
+
 
 def _substitute(text: str, substitutions: dict[str, object]) -> str:
     for key, value in substitutions.items():
@@ -128,15 +134,29 @@ class UiSchemaVersionTest(unittest.TestCase):
     """
 
     def test_no_device_source_declares_a_superseded_ui_schema(self) -> None:
-        declarations: list[tuple[str, str]] = []
+        publishers = 0
         for glob in UI_SOURCE_GLOBS:
             for path in sorted(ROOT.glob(glob)):
-                for match in re.finditer(r"grow-ui\.v\d+", path.read_text(encoding="utf-8")):
-                    declarations.append((str(path.relative_to(ROOT)), match.group()))
+                text = path.read_text(encoding="utf-8")
+                if UI_CONFIG_SUFFIX not in text:
+                    continue
+                publishers += 1
+                name = str(path.relative_to(ROOT))
+                with self.subTest(source=name):
+                    declared = set(SCHEMA_DECLARATION.findall(text))
+                    # Not merely "no v1 found": a source that publishes the topic
+                    # but whose schema this cannot read is the silent skip all
+                    # over again, so an unreadable declaration fails too.
+                    self.assertTrue(
+                        declared,
+                        f"{name} publishes {UI_CONFIG_SUFFIX} but declares no schema this "
+                        f"check can read, so it is silently exempt from the version guard",
+                    )
+                    self.assertEqual(declared, {UI_SCHEMA}, f"{name} declares {sorted(declared)}")
 
-        self.assertTrue(declarations, f"no UI schema declaration found under {UI_SOURCE_GLOBS}")
-        stale = sorted({d for d in declarations if d[1] != UI_SCHEMA})
-        self.assertEqual(stale, [], f"sources still declaring a superseded schema: {stale}")
+        self.assertTrue(
+            publishers, f"no source under {UI_SOURCE_GLOBS} publishes {UI_CONFIG_SUFFIX}"
+        )
 
 
 class UiConfigPayloadTest(unittest.TestCase):
