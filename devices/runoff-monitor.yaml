@@ -39,6 +39,7 @@ mqtt:
     # declared as sensor here or grow-app never matches it.
     # grow-ui.v2 short keys, unindented: AsyncMqttClient silently drops any
     # publish over the ESP8266 send buffer (2 x TCP_MSS = 2920 B).
+    # Key legend: tests/test_ui_config_payloads.py.
     - mqtt.publish:
         topic: grow/daniel-home/${devicename}/_ui/config
         retain: true

@@ -97,6 +97,7 @@ mqtt:
           }
     # grow-ui.v2 short keys, unindented: keeps the payload small in flash and
     # on the wire (and under the ESP8266 send-buffer ceiling on the plugs).
+    # Key legend: tests/test_ui_config_payloads.py.
     - mqtt.publish:
         topic: grow/daniel-home/atlas-hydro-monitor/_ui/config
         retain: true

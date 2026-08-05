@@ -205,6 +205,7 @@ mqtt:
     # rename — that is the only authority. (The payload is JSON: no comments allowed inside it.)
     # grow-ui.v2 short keys, unindented: keeps the payload small in flash and
     # on the wire (and under the ESP8266 send-buffer ceiling on the plugs).
+    # Key legend: tests/test_ui_config_payloads.py.
     - mqtt.publish:
         topic: grow/daniel-home/${devicename}/_ui/config
         retain: true

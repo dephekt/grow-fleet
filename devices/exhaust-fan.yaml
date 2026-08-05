@@ -79,6 +79,7 @@ mqtt:
     # whole packet exceeds the ESP8266 TCP send buffer (2 x TCP_MSS = 2920 B),
     # and it fails silently — hence grow-ui.v2's short keys, no pretty-printing,
     # and no label that only repeats the entity's own name.
+    # Key legend: tests/test_ui_config_payloads.py.
     - mqtt.publish:
         topic: grow/daniel-home/${devicename}/_ui/config
         retain: true

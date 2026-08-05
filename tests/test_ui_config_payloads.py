@@ -19,6 +19,7 @@ silently falling out of the guard.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -37,6 +38,25 @@ UI_CONFIG_SUFFIX = "/_ui/config"
 # grow-app still accepts v1, because a device only changes encoding when it is
 # reflashed, but nothing in this repo should declare v1 again.
 UI_SCHEMA = "grow-ui.v2"
+
+# Canonical key legend. grow-app's ui-metadata.ts is the parser, but it lives in
+# another repo, so anyone hand-editing a payload here reads this instead.
+#
+#   groups     i -> id       t -> title    n -> order   v -> variant
+#              s -> surface  d -> deviceSettingsSection p -> defaultOpen
+#   entities   c -> component  o -> objectId  g -> group
+#              n -> order      r -> role      l -> label
+#
+# Values the parser already defaults are omitted rather than sent: defaultOpen
+# false, and any absent role/label/variant/surface/deviceSettingsSection.
+V2_GROUP_KEYS = {"i", "t", "n", "v", "s", "d", "p"}
+V2_ENTITY_KEYS = {"c", "o", "g", "n", "r", "l"}
+
+# Device sources that declare a UI schema, including the non-ESPHome ones.
+# iter_device_specs() reads only fleet.yaml's `devices:` map, so the Arduino
+# nodes under `arduino_devices:` are invisible to every structural check below --
+# which is exactly how the spectrometer sat on v1 unnoticed.
+UI_SOURCE_GLOBS = ("devices/*.yaml", "arduino/*/*.ino")
 
 
 def _substitute(text: str, substitutions: dict[str, object]) -> str:
@@ -97,7 +117,45 @@ def esp8266_specs() -> list[DeviceSpec]:
     return [spec for spec in iter_device_specs() if spec.chip_family.startswith("ESP8266")]
 
 
+class UiSchemaVersionTest(unittest.TestCase):
+    """Text-level sweep, deliberately not structural.
+
+    The structural checks below iterate fleet.yaml's `devices:` map, so they see
+    only the ESPHome nodes; the Arduino sketches are a different language in a
+    different part of the tree and were silently exempt. Grepping the sources
+    catches every declaration regardless of file format, which is the only way
+    this stays true for whatever device type comes next.
+    """
+
+    def test_no_device_source_declares_a_superseded_ui_schema(self) -> None:
+        declarations: list[tuple[str, str]] = []
+        for glob in UI_SOURCE_GLOBS:
+            for path in sorted(ROOT.glob(glob)):
+                for match in re.finditer(r"grow-ui\.v\d+", path.read_text(encoding="utf-8")):
+                    declarations.append((str(path.relative_to(ROOT)), match.group()))
+
+        self.assertTrue(declarations, f"no UI schema declaration found under {UI_SOURCE_GLOBS}")
+        stale = sorted({d for d in declarations if d[1] != UI_SCHEMA})
+        self.assertEqual(stale, [], f"sources still declaring a superseded schema: {stale}")
+
+
 class UiConfigPayloadTest(unittest.TestCase):
+    def test_v2_payloads_use_only_known_short_keys(self) -> None:
+        for spec in iter_device_specs():
+            found = ui_config_publish(spec)
+            if found is None:
+                continue
+            document = json.loads(found[1])
+            with self.subTest(device=spec.name):
+                for group in document["groups"]:
+                    self.assertLessEqual(
+                        set(group), V2_GROUP_KEYS, f"unknown group key in {spec.name}"
+                    )
+                for entity in document["entities"]:
+                    self.assertLessEqual(
+                        set(entity), V2_ENTITY_KEYS, f"unknown entity key in {spec.name}"
+                    )
+
     def test_every_esp8266_device_publishes_a_ui_config(self) -> None:
         """Also the size guard's coverage check: nothing below can measure an empty set."""
         specs = esp8266_specs()
