@@ -34,12 +34,12 @@ devices:
     assets:
       - assets/thermal_overlay.js
     component_dependency: *stackdrift_esphome_components
-  grow-light:
-    config: devices/grow-light.yaml
-    esphome_name: grow-light
-    node_id: grow-light
-    project_name: stackdrift.grow-light
-    package: grow-light
+  exhaust-fan:
+    config: devices/exhaust-fan.yaml
+    esphome_name: exhaust-fan
+    node_id: exhaust-fan
+    project_name: stackdrift.exhaust-fan
+    package: exhaust-fan
     package_owner: stackdrift-firmware
     chip_family: ESP8266
     release: true
@@ -49,6 +49,17 @@ devices:
     # &stackdrift_esphome_components convention above).
     assets: &athom_plug_assets
       - devices/packages/athom-plug-base.yaml
+    component_dependency: *stackdrift_esphome_components
+  grow-light:
+    config: devices/grow-light.yaml
+    esphome_name: grow-light
+    node_id: grow-light
+    project_name: stackdrift.grow-light
+    package: grow-light
+    package_owner: stackdrift-firmware
+    chip_family: ESP8266
+    release: true
+    assets: *athom_plug_assets
     component_dependency: *stackdrift_esphome_components
   irrigation-pump:
     config: devices/irrigation-pump.yaml
