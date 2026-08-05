@@ -33,9 +33,10 @@ ESP8266_TCP_SND_BUF = 2920
 
 UI_CONFIG_SUFFIX = "/_ui/config"
 
-# v2 is v1 with short keys and defaulted values omitted; grow-app parses both, so
-# a device converts only when it is reflashed and the ESP32 nodes never need to.
-UI_SCHEMAS = ("grow-ui.v1", "grow-ui.v2")
+# The whole fleet emits v2 -- v1 with short keys and defaulted values omitted.
+# grow-app still accepts v1, because a device only changes encoding when it is
+# reflashed, but nothing in this repo should declare v1 again.
+UI_SCHEMA = "grow-ui.v2"
 
 
 def _substitute(text: str, substitutions: dict[str, object]) -> str:
@@ -117,7 +118,7 @@ class UiConfigPayloadTest(unittest.TestCase):
                 continue
             with self.subTest(device=spec.name):
                 document = json.loads(found[1])
-                self.assertIn(document["schema"], UI_SCHEMAS)
+                self.assertEqual(document["schema"], UI_SCHEMA)
                 self.assertEqual(document["nodeId"], spec.node_id)
                 measured += 1
         self.assertGreater(measured, 0, "no _ui/config payload was located anywhere in the fleet")

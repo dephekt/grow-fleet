@@ -123,46 +123,43 @@ mqtt:
             "installedVersion": "${firmware_version}",
             "manifestUrl": "${grow_app_base_url}/api/firmware/devices/m5stack-airq/manifest"
           }
+    # grow-ui.v2 short keys, unindented: keeps the payload small in flash and
+    # on the wire (and under the ESP8266 send-buffer ceiling on the plugs).
     - mqtt.publish:
         topic: grow/daniel-home/m5stack-airq/_ui/config
         retain: true
         qos: 1
         payload: |-
-          {
-            "schema": "grow-ui.v1",
-            "nodeId": "m5stack-airq",
-            "groups": [
-              { "id": "scd40", "title": "SCD40 (CO2 / RHT)", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
-              { "id": "sen55", "title": "SEN55 (PM / VOC / NOx / RHT)", "order": 20, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
-              { "id": "thresholds", "title": "CO2 Thresholds & Alerts", "order": 30, "surface": "device-settings", "deviceSettingsSection": "alerts", "defaultOpen": false },
-              { "id": "calibration", "title": "SCD40 Calibration", "order": 40, "surface": "device-settings", "deviceSettingsSection": "calibration", "defaultOpen": false },
-              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false }
-            ],
-            "entities": [
-              { "component": "sensor", "objectId": "co2", "group": "scd40", "role": "metric", "order": 10 },
-              { "component": "sensor", "objectId": "co2_moving_average", "group": "scd40", "role": "metric", "order": 20, "label": "CO2 Moving Avg" },
-              { "component": "sensor", "objectId": "daily_max_co2", "group": "scd40", "role": "metric", "order": 30, "label": "CO2 Daily Max" },
-              { "component": "sensor", "objectId": "scd40_temperature", "group": "scd40", "role": "metric", "order": 40, "label": "SCD40 Temp" },
-              { "component": "sensor", "objectId": "scd40_humidity", "group": "scd40", "role": "metric", "order": 50, "label": "SCD40 RH" },
-              { "component": "sensor", "objectId": "pm__1um", "group": "sen55", "role": "metric", "order": 60, "label": "PM1.0" },
-              { "component": "sensor", "objectId": "pm__2_5um", "group": "sen55", "role": "metric", "order": 70, "label": "PM2.5" },
-              { "component": "sensor", "objectId": "pm__4um", "group": "sen55", "role": "metric", "order": 80, "label": "PM4.0" },
-              { "component": "sensor", "objectId": "pm__10um", "group": "sen55", "role": "metric", "order": 90, "label": "PM10" },
-              { "component": "sensor", "objectId": "sen55_temperature", "group": "sen55", "role": "metric", "order": 100, "label": "SEN55 Temp" },
-              { "component": "sensor", "objectId": "sen55_humidity", "group": "sen55", "role": "metric", "order": 110, "label": "SEN55 RH" },
-              { "component": "sensor", "objectId": "voc_index", "group": "sen55", "role": "metric", "order": 120 },
-              { "component": "sensor", "objectId": "nox_index", "group": "sen55", "role": "metric", "order": 130 },
-              { "component": "number", "objectId": "co2_high_threshold", "group": "thresholds", "order": 10 },
-              { "component": "number", "objectId": "co2_low_threshold", "group": "thresholds", "order": 20 },
-              { "component": "binary_sensor", "objectId": "co2_high_alert", "group": "thresholds", "order": 30 },
-              { "component": "binary_sensor", "objectId": "co2_low_alert", "group": "thresholds", "order": 40 },
-              { "component": "number", "objectId": "scd40_temperature_offset", "group": "calibration", "order": 10 },
-              { "component": "switch", "objectId": "scd40_auto_self_calibration", "group": "calibration", "order": 20 },
-              { "component": "number", "objectId": "co2_forced_calibration_target", "group": "calibration", "order": 30 },
-              { "component": "button", "objectId": "perform_co2_forced_calibration", "group": "calibration", "order": 40 },
-              { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 }
-            ]
-          }
+          {"schema":"grow-ui.v2","nodeId":"m5stack-airq",
+          "groups":[
+          {"i":"scd40","t":"SCD40 (CO2 / RHT)","n":10,"v":"metrics","s":"dashboard","p":true},
+          {"i":"sen55","t":"SEN55 (PM / VOC / NOx / RHT)","n":20,"v":"metrics","s":"dashboard","p":true},
+          {"i":"thresholds","t":"CO2 Thresholds & Alerts","n":30,"s":"device-settings","d":"alerts"},
+          {"i":"calibration","t":"SCD40 Calibration","n":40,"s":"device-settings","d":"calibration"},
+          {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"}],
+          "entities":[
+          {"c":"sensor","o":"co2","g":"scd40","r":"metric","n":10},
+          {"c":"sensor","o":"co2_moving_average","g":"scd40","r":"metric","n":20,"l":"CO2 Moving Avg"},
+          {"c":"sensor","o":"daily_max_co2","g":"scd40","r":"metric","n":30,"l":"CO2 Daily Max"},
+          {"c":"sensor","o":"scd40_temperature","g":"scd40","r":"metric","n":40,"l":"SCD40 Temp"},
+          {"c":"sensor","o":"scd40_humidity","g":"scd40","r":"metric","n":50,"l":"SCD40 RH"},
+          {"c":"sensor","o":"pm__1um","g":"sen55","r":"metric","n":60,"l":"PM1.0"},
+          {"c":"sensor","o":"pm__2_5um","g":"sen55","r":"metric","n":70,"l":"PM2.5"},
+          {"c":"sensor","o":"pm__4um","g":"sen55","r":"metric","n":80,"l":"PM4.0"},
+          {"c":"sensor","o":"pm__10um","g":"sen55","r":"metric","n":90,"l":"PM10"},
+          {"c":"sensor","o":"sen55_temperature","g":"sen55","r":"metric","n":100,"l":"SEN55 Temp"},
+          {"c":"sensor","o":"sen55_humidity","g":"sen55","r":"metric","n":110,"l":"SEN55 RH"},
+          {"c":"sensor","o":"voc_index","g":"sen55","r":"metric","n":120},
+          {"c":"sensor","o":"nox_index","g":"sen55","r":"metric","n":130},
+          {"c":"number","o":"co2_high_threshold","g":"thresholds","n":10},
+          {"c":"number","o":"co2_low_threshold","g":"thresholds","n":20},
+          {"c":"binary_sensor","o":"co2_high_alert","g":"thresholds","n":30},
+          {"c":"binary_sensor","o":"co2_low_alert","g":"thresholds","n":40},
+          {"c":"number","o":"scd40_temperature_offset","g":"calibration","n":10},
+          {"c":"switch","o":"scd40_auto_self_calibration","g":"calibration","n":20},
+          {"c":"number","o":"co2_forced_calibration_target","g":"calibration","n":30},
+          {"c":"button","o":"perform_co2_forced_calibration","g":"calibration","n":40},
+          {"c":"button","o":"restart","g":"maintenance","n":10}]}
 
 i2c:
   id: bus_a

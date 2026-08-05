@@ -203,31 +203,28 @@ mqtt:
     # nothing complained: grow-app drops an unmatched objectId silently. Check the entities below
     # against the retained grow/daniel-home/_discovery/+/${devicename}/+/config topics after any
     # rename — that is the only authority. (The payload is JSON: no comments allowed inside it.)
+    # grow-ui.v2 short keys, unindented: keeps the payload small in flash and
+    # on the wire (and under the ESP8266 send-buffer ceiling on the plugs).
     - mqtt.publish:
         topic: grow/daniel-home/${devicename}/_ui/config
         retain: true
         qos: 1
         payload: |-
-          {
-            "schema": "grow-ui.v1",
-            "nodeId": "${devicename}",
-            "groups": [
-              { "id": "grow_light", "title": "Grow Light", "order": 12, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
-              { "id": "display", "title": "Display", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
-              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
-              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
-            ],
-            "entities": [
-              { "component": "number", "objectId": "grow_light_brightness", "group": "grow_light", "role": "quick-control", "order": 10, "label": "Brightness" },
-              { "component": "light", "objectId": "screen_backlight", "group": "display", "order": 10, "label": "Screen Backlight" },
-              { "component": "switch", "objectId": "screen_flip", "group": "display", "order": 20, "label": "Flip Screen" },
-              { "component": "button", "objectId": "restart", "group": "maintenance", "order": 10 },
-              { "component": "button", "objectId": "check_firmware_update", "group": "diagnostics", "order": 5 },
-              { "component": "sensor", "objectId": "wifi_signal", "group": "diagnostics", "order": 10 },
-              { "component": "sensor", "objectId": "uptime", "group": "diagnostics", "order": 20 },
-              { "component": "sensor", "objectId": "ip_address", "group": "diagnostics", "order": 30 }
-            ]
-          }
+          {"schema":"grow-ui.v2","nodeId":"${devicename}",
+          "groups":[
+          {"i":"grow_light","t":"Grow Light","n":12,"v":"quick-controls","s":"dashboard","p":true},
+          {"i":"display","t":"Display","n":30,"s":"device-settings","d":"controls"},
+          {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
+          {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
+          "entities":[
+          {"c":"number","o":"grow_light_brightness","g":"grow_light","r":"quick-control","n":10,"l":"Brightness"},
+          {"c":"light","o":"screen_backlight","g":"display","n":10,"l":"Screen Backlight"},
+          {"c":"switch","o":"screen_flip","g":"display","n":20,"l":"Flip Screen"},
+          {"c":"button","o":"restart","g":"maintenance","n":10},
+          {"c":"button","o":"check_firmware_update","g":"diagnostics","n":5},
+          {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
+          {"c":"sensor","o":"uptime","g":"diagnostics","n":20},
+          {"c":"sensor","o":"ip_address","g":"diagnostics","n":30}]}
     # This node's contribution to the logical grow lights: the DAC channel is the dimmer for "main".
     # grow-app merges every device's _lights fragment by light id, so the Main Light card pulls
     # on/off + schedule + power from the Athom plug and this dimmer from here.
