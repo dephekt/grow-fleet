@@ -1,0 +1,320 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
+# Athom Smart Plug US V2 — Exhaust fan actuator.
+#
+# The shared plug baseline (hardware map, power metering, MQTT/OTA transport,
+# diagnostics) lives in packages/athom-plug-base.yaml; this file holds the
+# scheduling and the fan's safety contract.
+#
+# Scheduling contract (desired-state model, as in grow-light.yaml):
+#   Two independent arms own the relay; the control system only sets desired
+#   state and the plug applies it on its own sntp clock.
+#     - Fan Schedule: a daily window [on, off) in local wall time, half-open
+#       and free to wrap midnight; on == off is an EMPTY window (always off).
+#     - Fan Cycle: run for `Fan Cycle Run` minutes out of every `Fan Cycle
+#       Period` minutes, anchored to local midnight — 5/60 is the first five
+#       minutes of every hour, and stays that way across reboots.
+#   Both armed = the cycle runs only inside the window; neither armed = manual
+#   control. While armed the relay is re-asserted every 10 s, so a manual or
+#   physical toggle reverts within 10 s — disarm to take lasting control.
+#   A period that does not divide 1440 gets a short final cycle at midnight.
+#
+# Safety contract:
+#   - relay restore_mode RESTORE_DEFAULT_OFF: a manual transition is flushed to
+#     flash as it happens so it survives a power blip, while cycle-driven
+#     transitions ride the base package's 1 h preference interval.
+#   - No max-on watchdog: continuous ventilation is legitimate.
+#   - Overcurrent at ${current_limit} A LATCHES — both arms are disarmed so
+#     the window cannot re-energize a faulted load 10 s later.
+#
+# NOTE for edits: ESP8266 preference offsets are positional, so keep the
+# relative order of the pref-allocating sections (switch, datetime, number).
+#
+# Flash / build:
+#   make build exhaust-fan
+#   esphome run  devices/exhaust-fan.yaml --device /dev/ttyUSB0
+#   esphome logs devices/exhaust-fan.yaml --device /dev/ttyUSB0
+
+substitutions:
+  devicename: exhaust-fan
+  friendlyname: "Exhaust Fan"
+  power_sensor_name: "Fan Power"
+  power_icon: mdi:fan
+  # NEMA 5-15 (Athom US V2) is rated 15 A peak / 12 A continuous, and a duty-
+  # cycled fan is a continuous load; 12 A also clears any realistic inline-fan
+  # motor inrush.
+  current_limit: "12"
+
+packages:
+  athom_plug: !include packages/athom-plug-base.yaml
+
+# The timezone platform is pulled from the pinned stackdrift/esphome-components
+# commit tracked in fleet.yaml. Must stay in this file (not the package):
+# scripts/fleetlib.py reads external_components flat from the device YAML for
+# packaging provenance.
+external_components:
+  - source:
+      type: git
+      url: https://github.com/dephekt/esphome-components.git
+      ref: 0926abf947d3cba3c43d1bf1d29de7bc054767cd
+      path: .
+    components: ["timezone"]
+
+wifi:
+  # Never reboot for connectivity: a reboot mid-outage drops the synced clock,
+  # and without a network sntp cannot re-sync, so the cycle would freeze.
+  reboot_timeout: 0s
+
+mqtt:
+  # Same rationale as the wifi reboot_timeout.
+  reboot_timeout: 0s
+  on_connect:
+    # Package list merge appends this after the base's delay + _firmware/config
+    # publish.
+    # NOTE: "component" must match the MQTT discovery topic's component slug —
+    # ESPHome publishes text_sensor discovery under "sensor", so ip_address is
+    # declared as sensor here or grow-app never matches it.
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-ui.v1",
+            "nodeId": "${devicename}",
+            "groups": [
+              { "id": "overview", "title": "${friendlyname}", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
+              { "id": "controls", "title": "Controls", "order": 20, "variant": "quick-controls", "surface": "dashboard", "defaultOpen": true },
+              { "id": "cycle", "title": "Cycle Timer", "order": 30, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": true },
+              { "id": "schedule", "title": "Daily Window", "order": 40, "surface": "device-settings", "deviceSettingsSection": "controls", "defaultOpen": false },
+              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
+              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
+            ],
+            "entities": [
+              { "component": "sensor",   "objectId": "fan_power",           "group": "overview",    "role": "metric",        "order": 10, "label": "Fan Power" },
+              { "component": "sensor",   "objectId": "voltage",             "group": "overview",    "role": "metric",        "order": 20 },
+              { "component": "sensor",   "objectId": "current",             "group": "overview",    "role": "metric",        "order": 30 },
+              { "component": "sensor",   "objectId": "total_daily_energy",  "group": "overview",    "role": "metric",        "order": 40, "label": "Daily Energy" },
+              { "component": "switch",   "objectId": "exhaust_fan",         "group": "controls",    "role": "quick-control", "order": 10, "label": "Fan" },
+              { "component": "switch",   "objectId": "fan_cycle",           "group": "cycle",       "order": 10, "label": "Cycle Armed" },
+              { "component": "number",   "objectId": "fan_cycle_run",       "group": "cycle",       "order": 20, "label": "Run For (min)" },
+              { "component": "number",   "objectId": "fan_cycle_period",    "group": "cycle",       "order": 30, "label": "Every (min)" },
+              { "component": "switch",   "objectId": "fan_schedule",        "group": "schedule",    "order": 10, "label": "Window Armed" },
+              { "component": "time",     "objectId": "fan_on_time",         "group": "schedule",    "order": 20, "label": "On Time" },
+              { "component": "time",     "objectId": "fan_off_time",        "group": "schedule",    "order": 30, "label": "Off Time" },
+              { "component": "text",     "objectId": "time_zone",           "group": "schedule",    "order": 40, "label": "Time Zone (POSIX)" },
+              { "component": "button",   "objectId": "check_firmware_update","group": "maintenance", "order": 10 },
+              { "component": "button",   "objectId": "restart",             "group": "maintenance", "order": 20 },
+              { "component": "sensor",   "objectId": "wifi_signal",         "group": "diagnostics", "order": 10 },
+              { "component": "sensor",   "objectId": "uptime",              "group": "diagnostics", "order": 20 },
+              { "component": "sensor",   "objectId": "ip_address",          "group": "diagnostics", "order": 30 }
+            ]
+          }
+
+time:
+  - id: !extend sntp_time
+    on_time_sync:
+      - script.execute: apply_fan_schedule
+
+# Set only while apply_fan_schedule drives the relay, so the relay's triggers
+# can tell a scheduled transition from a manual one. restore_value: no, so this
+# allocates no preference and cannot shift the base package's offsets.
+globals:
+  - id: schedule_driven
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+# ─── Relay — Exhaust Fan ──────────────────────────────────────────────────────
+switch:
+  - platform: gpio
+    name: "Exhaust Fan"
+    id: fan_relay
+    pin: GPIO12
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: mdi:fan
+    # Flush manual transitions immediately (as grow-light does for all of them)
+    # but not the cycle's, which would erase the single ESP8266 preferences
+    # sector tens of times a day for state the next tick recomputes anyway.
+    on_turn_on:
+      - lambda: if (!id(schedule_driven)) global_preferences->sync();
+    on_turn_off:
+      - lambda: if (!id(schedule_driven)) global_preferences->sync();
+
+  # Arms the daily window; OFF leaves the window unevaluated.
+  - platform: template
+    name: "Fan Schedule"
+    id: fan_schedule
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: mdi:calendar-clock
+    on_turn_on:
+      - script.execute: apply_fan_schedule
+      - lambda: global_preferences->sync();
+    on_turn_off:
+      - lambda: global_preferences->sync();
+
+  # Arms the duty cycle; OFF leaves the cycle unevaluated.
+  - platform: template
+    name: "Fan Cycle"
+    id: fan_cycle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: mdi:timer-sync-outline
+    on_turn_on:
+      - script.execute: apply_fan_schedule
+      - lambda: global_preferences->sync();
+    on_turn_off:
+      - lambda: global_preferences->sync();
+
+# ─── Daily window ─────────────────────────────────────────────────────────────
+# Only in effect while Fan Schedule is armed; values persist to flash.
+datetime:
+  - platform: template
+    name: "Fan On Time"
+    id: fan_on_time
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "06:00:00"
+    icon: mdi:weather-sunset-up
+    on_value:
+      - script.execute: apply_fan_schedule
+      - lambda: global_preferences->sync();
+
+  - platform: template
+    name: "Fan Off Time"
+    id: fan_off_time
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "22:00:00"
+    icon: mdi:weather-sunset-down
+    on_value:
+      - script.execute: apply_fan_schedule
+      - lambda: global_preferences->sync();
+
+# ─── Cycle timer ──────────────────────────────────────────────────────────────
+# Defaults to five minutes at the top of every hour.
+number:
+  - platform: template
+    name: "Fan Cycle Run"
+    id: fan_cycle_run
+    entity_category: config
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 240
+    step: 1
+    initial_value: 5
+    restore_value: true
+    optimistic: true
+    mode: box
+    icon: mdi:fan-clock
+    on_value:
+      - script.execute: apply_fan_schedule
+      - lambda: global_preferences->sync();
+
+  - platform: template
+    name: "Fan Cycle Period"
+    id: fan_cycle_period
+    entity_category: config
+    unit_of_measurement: "min"
+    min_value: 1
+    max_value: 1440
+    step: 1
+    initial_value: 60
+    restore_value: true
+    optimistic: true
+    mode: box
+    icon: mdi:timer-outline
+    on_value:
+      - script.execute: apply_fan_schedule
+      - lambda: global_preferences->sync();
+
+# 10 s, not grow-light's 30 s: a five-minute run needs edges tighter than a
+# 30 s tick would give.
+interval:
+  - interval: 10s
+    then:
+      - script.execute: apply_fan_schedule
+
+script:
+  - id: apply_fan_schedule
+    then:
+      - lambda: |-
+          if (!id(fan_schedule).state && !id(fan_cycle).state)
+            return;                              // manual — hands off the relay
+          auto now = id(sntp_time).now();
+          if (!now.is_valid())
+            return;
+          // Compare in seconds: the datetime entities accept hh:mm:ss over
+          // MQTT, and truncating to minutes would make times differing only
+          // in seconds collapse into the on == off empty-window branch.
+          const int t = now.hour * 3600 + now.minute * 60 + now.second;
+          bool want = true;
+          if (id(fan_schedule).state) {
+            const int on  = id(fan_on_time).hour * 3600 + id(fan_on_time).minute * 60 + id(fan_on_time).second;
+            const int off = id(fan_off_time).hour * 3600 + id(fan_off_time).minute * 60 + id(fan_off_time).second;
+            if (on == off)
+              want = false;                      // empty window — always off
+            else if (on < off)
+              want = (t >= on && t < off);       // same-day window
+            else
+              want = (t >= on || t < off);       // wraps midnight
+          }
+          if (want && id(fan_cycle).state) {
+            const float period_min = id(fan_cycle_period).state;
+            const float run_min    = id(fan_cycle_run).state;
+            // A restore that never landed leaves these NAN; treat an unusable
+            // cycle as off rather than casting NAN to int.
+            if (std::isnan(period_min) || std::isnan(run_min) || period_min < 1.0f || run_min <= 0.0f)
+              want = false;
+            else
+              // Anchored to local midnight, so the phase is identical after a
+              // reboot. run >= period pins the fan on for the whole period.
+              want = (t % (int) (period_min * 60)) < (int) (run_min * 60);
+          }
+          // The relay's triggers fire synchronously inside these calls, so the
+          // flag is what marks the transition as scheduled rather than manual.
+          id(schedule_driven) = true;
+          if (want && !id(fan_relay).state)
+            id(fan_relay).turn_on();
+          else if (!want && id(fan_relay).state)
+            id(fan_relay).turn_off();
+          id(schedule_driven) = false;
+
+  # Overcurrent response (detection in the base package). Disarming both arms
+  # LATCHES the trip; re-arm manually after fixing the load.
+  - id: overcurrent_trip
+    parameters:
+      amps: float
+    then:
+      - logger.log:
+          level: ERROR
+          format: "Overcurrent: %.1f A > ${current_limit} A — relay off, schedule and cycle disarmed"
+          args: [amps]
+      - switch.turn_off: fan_schedule
+      - switch.turn_off: fan_cycle
+      - switch.turn_off: fan_relay
+
+# ─── Physical button (GPIO5) ─────────────────────────────────────────────────
+# Short press: toggle the relay; an armed arm re-asserts within 10 s.
+# Long press 4 s: factory reset (from the base package).
+binary_sensor:
+  - id: !extend power_button
+    on_multi_click:
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.2s
+        then:
+          - switch.toggle: fan_relay
+
+# ─── Timezone override ────────────────────────────────────────────────────────
+# Runtime POSIX-TZ override for the schedule clock; empty restores the build
+# default, and grow-app's tz reconciler stamps the site zone here.
+text:
+  - platform: timezone
+    name: "Time Zone"
+    id: tz_override
+    time_id: sntp_time
