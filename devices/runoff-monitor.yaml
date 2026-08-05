@@ -37,33 +37,31 @@ mqtt:
     # NOTE: "component" must match the MQTT discovery topic's component slug —
     # ESPHome publishes text_sensor discovery under "sensor", so ip_address is
     # declared as sensor here or grow-app never matches it.
+    # grow-ui.v2 short keys, unindented: AsyncMqttClient silently drops any
+    # publish over the ESP8266 send buffer (2 x TCP_MSS = 2920 B).
+    # Key legend: tests/test_ui_config_payloads.py.
     - mqtt.publish:
         topic: grow/daniel-home/${devicename}/_ui/config
         retain: true
         qos: 1
         payload: |-
-          {
-            "schema": "grow-ui.v1",
-            "nodeId": "${devicename}",
-            "groups": [
-              { "id": "overview", "title": "Runoff", "order": 10, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
-              { "id": "status", "title": "Pump Status", "order": 20, "variant": "metrics", "surface": "dashboard", "defaultOpen": true },
-              { "id": "maintenance", "title": "Maintenance", "order": 80, "surface": "device-settings", "deviceSettingsSection": "maintenance", "defaultOpen": false },
-              { "id": "diagnostics", "title": "Diagnostics", "order": 90, "surface": "device-settings", "deviceSettingsSection": "diagnostics", "defaultOpen": false }
-            ],
-            "entities": [
-              { "component": "sensor",        "objectId": "runoff_pump_power",    "group": "overview",  "role": "metric",  "order": 10, "label": "Runoff Pump Power" },
-              { "component": "sensor",        "objectId": "voltage",              "group": "overview",  "role": "metric",  "order": 20 },
-              { "component": "sensor",        "objectId": "current",              "group": "overview",  "role": "metric",  "order": 30 },
-              { "component": "sensor",        "objectId": "total_daily_energy",   "group": "overview",  "role": "metric",  "order": 40, "label": "Daily Energy" },
-              { "component": "binary_sensor", "objectId": "runoff_pump_running",  "group": "status",    "role": "metric",  "order": 10, "label": "Runoff Pump Running" },
-              { "component": "button",        "objectId": "check_firmware_update","group": "maintenance","order": 10 },
-              { "component": "button",        "objectId": "restart",              "group": "maintenance","order": 20 },
-              { "component": "sensor",        "objectId": "wifi_signal",   "group": "diagnostics","order": 10 },
-              { "component": "sensor",        "objectId": "uptime",        "group": "diagnostics","order": 20 },
-              { "component": "sensor",        "objectId": "ip_address",           "group": "diagnostics","order": 30 }
-            ]
-          }
+          {"schema":"grow-ui.v2","nodeId":"${devicename}",
+          "groups":[
+          {"i":"overview","t":"Runoff","n":10,"v":"metrics","s":"dashboard","p":true},
+          {"i":"status","t":"Pump Status","n":20,"v":"metrics","s":"dashboard","p":true},
+          {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
+          {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
+          "entities":[
+          {"c":"sensor","o":"runoff_pump_power","g":"overview","r":"metric","n":10,"l":"Runoff Pump Power"},
+          {"c":"sensor","o":"voltage","g":"overview","r":"metric","n":20},
+          {"c":"sensor","o":"current","g":"overview","r":"metric","n":30},
+          {"c":"sensor","o":"total_daily_energy","g":"overview","r":"metric","n":40,"l":"Daily Energy"},
+          {"c":"binary_sensor","o":"runoff_pump_running","g":"status","r":"metric","n":10,"l":"Runoff Pump Running"},
+          {"c":"button","o":"check_firmware_update","g":"maintenance","n":10},
+          {"c":"button","o":"restart","g":"maintenance","n":20},
+          {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
+          {"c":"sensor","o":"uptime","g":"diagnostics","n":20},
+          {"c":"sensor","o":"ip_address","g":"diagnostics","n":30}]}
 
 # ─── Relay — always on, internal, not published ───────────────────────────────
 # internal: true prevents discovery/MQTT publication. The relay must ALWAYS

@@ -121,11 +121,12 @@ void publishRetained(const char *topic, const char *payload) {
   mqttClient.endMessage();
 }
 
+// grow-ui.v2 short keys; legend in tests/test_ui_config_payloads.py.
 void publishUiConfig() {
   publishRetained(T_UI,
-    "{\"schema\":\"grow-ui.v1\",\"nodeId\":\"spectrometer\",\"groups\":["
-    "{\"id\":\"overview\",\"title\":\"Spectrum\",\"order\":10,\"variant\":\"metrics\","
-    "\"surface\":\"dashboard\",\"defaultOpen\":true}],\"entities\":[]}");
+    "{\"schema\":\"grow-ui.v2\",\"nodeId\":\"spectrometer\",\"groups\":["
+    "{\"i\":\"overview\",\"t\":\"Spectrum\",\"n\":10,\"v\":\"metrics\","
+    "\"s\":\"dashboard\",\"p\":true}],\"entities\":[]}");
 }
 
 char fwbuf[512];
