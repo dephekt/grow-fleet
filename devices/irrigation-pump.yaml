@@ -32,11 +32,13 @@
 #   ${current_limit} A is the PLUG's rating; a SeaFlo draws a couple of amps and
 #   LESS when dry, so the fault is under-load-forever, the opposite signature.
 #
-#   Detected on duration instead: normal irrigation is bounded (grow-app clamps
-#   a single run to max_run_seconds, 900 s today), a dry run is not.
-#   ${dry_run_timeout} sits clear of that ceiling so a long legitimate soak
-#   cannot false-trip into a cutout that needs a human to clear. Lower it if
-#   grow-app's clamp ever drops — the two numbers are coupled.
+#   Detected on duration instead: normal irrigation is bounded, a dry run is
+#   not. The ceiling is grow-app's max_run_seconds, 600 s — itself derived, not
+#   arbitrary: the largest shot either book describes is a generative 10% of
+#   substrate, which at this zone's 133 mL/min is 8.5 min. ${dry_run_timeout}
+#   sits clear of 600 s so a long legitimate soak cannot false-trip into a
+#   cutout that needs a human at the tent to clear. The two numbers are
+#   coupled; move them together.
 #
 #   The trip is deliberately slow because it is the LAST line, and the one that
 #   still works with the network down. Fast detection (valve closed + pump still
@@ -78,8 +80,8 @@ substitutions:
   # the base package's 3 W standby suppression.
   pump_draw_min_w: "5.0"
   # Continuous draw that means the pressure switch is never going to open.
-  # Must stay above grow-app's max_run_seconds (900 s) — see the header.
-  dry_run_timeout: 20min
+  # Must stay above grow-app's max_run_seconds (600 s) — see the header.
+  dry_run_timeout: 12min
   # Bridges the pressure-switch cycling within one shot so the overrun timer
   # measures a session, not a single cycle. Well under the shortest gap between
   # scheduled shots, so consecutive shots still count as separate sessions.

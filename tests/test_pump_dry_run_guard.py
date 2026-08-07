@@ -27,13 +27,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from fleetlib import _load_device_config, device_spec  # noqa: E402
 
-# grow-app clamps any single irrigation run to zones.max_run_seconds, 900 s
-# today. The guard must sit clear of that ceiling: a legitimate long soak that
-# trips the cutout latches the relay off and needs a human at the tent to rearm,
-# which is worse than the fault the guard exists to catch. Lower this only
-# alongside the grow-app clamp -- the two numbers are coupled, and the coupling
-# is documented in devices/irrigation-pump.yaml.
-GROW_APP_MAX_RUN_SECONDS = 900
+# grow-app clamps any single irrigation run to zones.max_run_seconds, 600 s.
+# That clamp is derived rather than arbitrary: the largest shot either book
+# describes is a generative 10% of substrate, which at this zone's 133 mL/min
+# works out to 8.5 min, so 600 s covers it with margin.
+#
+# The guard must sit clear of that ceiling. A legitimate long soak that trips
+# the cutout latches the relay off and needs a human at the tent to rearm, which
+# is worse than the fault the guard exists to catch. Move this only alongside
+# the grow-app clamp -- the two are coupled, and the coupling is documented in
+# devices/irrigation-pump.yaml.
+GROW_APP_MAX_RUN_SECONDS = 600
 
 DURATION = re.compile(r"^(\d+(?:\.\d+)?)\s*(ms|s|min|h)$")
 UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "min": 60.0, "h": 3600.0}
