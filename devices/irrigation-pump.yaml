@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Daniel Snider
 
-# Athom Smart Plug US V2 — Irrigation pump monitor + maintenance override.
+# Athom Smart Plug US V2 — Irrigation pump monitor + dry-run guard.
 #
 # The shared plug baseline (hardware map, power metering, MQTT/OTA transport,
 # diagnostics, sntp + America/Chicago timezone) lives in
@@ -11,8 +11,9 @@
 # Role:
 #   The SeaFlo irrigation pump is powered by design and self-cycles on its own
 #   pressure switch — the OpenSprinkler valve gates irrigation, NOT this relay.
-#   This plug is telemetry (Pump Power draw) plus a manual override to cut
-#   supply for maintenance. It is not an actuator.
+#   This plug is telemetry (Pump Power draw) plus a manual maintenance override.
+#   It is not an irrigation actuator, but it IS the protective cutout for the
+#   two trips below, which act locally and never wait on MQTT or grow-app.
 #
 # Relay contract:
 #   - restore_mode: RESTORE_DEFAULT_ON — powered on by default and re-energized
@@ -21,6 +22,23 @@
 #     be cut.)
 #   - Overcurrent (raw sample > ${current_limit} A, detected in the base
 #     package): relay off — fire safety wins over "always on" (overcurrent_trip).
+#   - Dry run (drawing for > ${dry_run_timeout}): relay off, latched (below).
+#
+# Dry-run guard:
+#   - A dry pump draws LESS than a loaded one, so overcurrent cannot see it and
+#     only duration separates a dry run from a real shot.
+#   - ${dry_run_timeout} clears grow-app's 600 s max_run_seconds so a long
+#     legitimate soak cannot latch the pump off; move the two together.
+#   - pump_drawing bridges the pressure-switch cycling and dry_run_watchdog is
+#     the session clock; the trip is the delay running to completion.
+#
+# Fault signalling and rearm:
+#   - The trip raises pump_relay's error status, which drives both the base
+#     package's status_led and the dry_run_fault sensor grow-app surfaces.
+#   - Error status is runtime-only, so a reboot clears the annunciator while the
+#     relay stays latched off — the relay is the safety state.
+#   - Rearm is re-energizing the supply (button or grow-app switch), which
+#     clears the error and restarts the session clock.
 #
 # Time: the base package's sntp is baked to America/Chicago (DST-correct), which
 # is all total_daily_energy needs for a local-midnight reset. No schedule and no
@@ -36,6 +54,15 @@ substitutions:
   friendlyname: "Irrigation Pump"
   power_sensor_name: "Pump Power"
   power_icon: mdi:pump
+  # Draw above which the pump counts as running, matching grow-app's
+  # PUMP_DRAW_MIN_W.
+  pump_draw_min_w: "5.0"
+  # Session length that means the pressure switch is never going to open; must
+  # stay above grow-app's max_run_seconds (600 s).
+  dry_run_timeout: 12min
+  # Draw gap that ends a session, bridging the pressure-switch cycling within
+  # one shot.
+  pump_cycle_bridge: 60s
 
 packages:
   athom_plug: !include packages/athom-plug-base.yaml
@@ -62,11 +89,12 @@ mqtt:
           {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
           {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
           "entities":[
+          {"c":"binary_sensor","o":"dry_run_fault","g":"overview","r":"metric","n":5,"l":"Dry Run Fault"},
           {"c":"sensor","o":"pump_power","g":"overview","r":"metric","n":10,"l":"Pump Power"},
           {"c":"sensor","o":"voltage","g":"overview","r":"metric","n":20},
           {"c":"sensor","o":"current","g":"overview","r":"metric","n":30},
           {"c":"sensor","o":"total_daily_energy","g":"overview","r":"metric","n":40,"l":"Daily Energy"},
-          {"c":"switch","o":"irrigation_pump","g":"settings","n":10,"l":"Pump Supply (maintenance)"},
+          {"c":"switch","o":"irrigation_pump","g":"settings","n":10,"l":"Pump Supply (rearm / maintenance)"},
           {"c":"button","o":"check_firmware_update","g":"maintenance","n":10},
           {"c":"button","o":"restart","g":"maintenance","n":20},
           {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
@@ -76,7 +104,11 @@ mqtt:
 # ─── Relay — Irrigation Pump supply ───────────────────────────────────────────
 # On by design; the switch (or the physical button) cuts supply for maintenance.
 # Flush to flash on each transition so a power blip restores the true last state
-# (e.g. an overcurrent-off or a maintenance-off is not lost to the 1 h sync).
+# (e.g. an overcurrent-off, a dry-run trip or a maintenance-off is not lost to
+# the 1 h sync).
+#
+# NOTE: a rearm within ${pump_cycle_bridge} of a trip leaves pump_drawing
+# latched on, so no on_press follows to restart the clock — on_turn_on does it.
 switch:
   - platform: gpio
     name: "Irrigation Pump"
@@ -84,13 +116,22 @@ switch:
     pin: GPIO12
     restore_mode: RESTORE_DEFAULT_ON
     icon: mdi:water-pump
+    # Energizing the supply IS the rearm — there is no separate reset control.
     on_turn_on:
-      - lambda: global_preferences->sync();
+      - lambda: |-
+          id(pump_relay).status_clear_error();
+          global_preferences->sync();
+      - if:
+          condition:
+            binary_sensor.is_on: pump_drawing
+          then:
+            - script.execute: dry_run_watchdog
     on_turn_off:
       - lambda: global_preferences->sync();
 
 # ─── Physical button (GPIO5) ─────────────────────────────────────────────────
-# Short press: toggle the relay (local maintenance override).
+# Short press: toggle the relay (local maintenance override, and the rearm after
+# a trip).
 # Long press 4 s: factory reset (from the base package).
 binary_sensor:
   - id: !extend power_button
@@ -100,6 +141,30 @@ binary_sensor:
           - OFF for at least 0.2s
         then:
           - switch.toggle: pump_relay
+
+  # The pump is drawing, with delayed_off bridging the pressure-switch cycling
+  # so an edge here means a draw session started or ended.
+  - platform: template
+    id: pump_drawing
+    internal: true
+    # ESPHome suppresses the first on_press otherwise, leaving the draw session
+    # a reboot lands in the middle of unguarded.
+    trigger_on_initial_state: true
+    lambda: return id(plug_power).state >= ${pump_draw_min_w};
+    filters:
+      - delayed_off: ${pump_cycle_bridge}
+    on_press:
+      - script.execute: dry_run_watchdog
+    on_release:
+      - script.stop: dry_run_watchdog
+
+  # Annunciator for the latched trip, mirroring the error status the script
+  # raises so no preference is allocated for a second source of truth.
+  - platform: template
+    name: "Dry Run Fault"
+    id: dry_run_fault
+    device_class: problem
+    lambda: return id(pump_relay).status_has_error();
 
 # ─── Scripts ──────────────────────────────────────────────────────────────────
 script:
@@ -114,3 +179,20 @@ script:
           format: "Overcurrent: %.1f A > ${current_limit} A — pump relay off"
           args: [amps]
       - switch.turn_off: pump_relay
+
+  # Session clock: a dry run is the draw session that never ends, so the trip is
+  # simply this delay running to completion.
+  - id: dry_run_watchdog
+    mode: restart
+    then:
+      - delay: ${dry_run_timeout}
+      - script.execute: dry_run_trip
+
+  # Dry-run response: cut supply and latch until the supply is re-energized.
+  - id: dry_run_trip
+    then:
+      - logger.log:
+          level: ERROR
+          format: "Dry run: pump drew for > ${dry_run_timeout} — relay off, rearm to clear"
+      - switch.turn_off: pump_relay
+      - lambda: id(pump_relay).status_set_error();
