@@ -147,6 +147,9 @@ binary_sensor:
   - platform: template
     id: pump_drawing
     internal: true
+    # ESPHome suppresses the first on_press otherwise, leaving the draw session
+    # a reboot lands in the middle of unguarded.
+    trigger_on_initial_state: true
     lambda: return id(plug_power).state >= ${pump_draw_min_w};
     filters:
       - delayed_off: ${pump_cycle_bridge}

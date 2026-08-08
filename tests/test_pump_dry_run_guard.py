@@ -30,15 +30,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from fleetlib import _load_device_config, device_spec  # noqa: E402
 
-# grow-app clamps a single irrigation run to the zone's max_run_seconds, and the
-# guard must sit clear of that ceiling -- a legitimate long soak that trips the
-# cutout latches the relay off until a human reaches the tent, which is worse
-# than the fault the guard exists to catch.
-#
-# NOTE: grow-app does not enforce this number. max_run_seconds is a per-zone
-# column defaulting to 300 and validated only as a positive integer, so a zone
-# edited above this value silently breaks the coupling from the other side.
+# grow-app's per-zone run clamp, which the guard must sit clear of and which
+# grow-app itself validates only as a positive integer.
 GROW_APP_MAX_RUN_SECONDS = 600
+
+# The base package zeroes any power sample under this, so a smaller draw
+# threshold could never be reached.
+PLUG_STANDBY_FLOOR_W = 3.0
 
 DURATION = re.compile(r"(\d+(?:\.\d+)?)\s*(ms|s|min|h)")
 UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "min": 60.0, "h": 3600.0}
@@ -97,6 +95,67 @@ class PumpDryRunGuardTest(unittest.TestCase):
             if isinstance(entry, dict) and entry.get("id") == "pump_relay":
                 return entry
         raise AssertionError("irrigation-pump declares no pump_relay switch")
+
+    @property
+    def pump_drawing(self) -> dict[str, Any]:
+        for entry in self.config.get("binary_sensor", []):
+            if isinstance(entry, dict) and entry.get("id") == "pump_drawing":
+                return entry
+        raise AssertionError("irrigation-pump declares no pump_drawing binary sensor")
+
+    def test_draw_session_starts_and_ends_the_watchdog(self) -> None:
+        """The session edges are the only thing that arms and disarms the clock."""
+        sensor = self.pump_drawing
+        self.assertIn(
+            "dry_run_watchdog",
+            action_values(sensor.get("on_press"), "script.execute"),
+            "pump_drawing.on_press must start dry_run_watchdog or the guard never arms",
+        )
+        self.assertIn(
+            "dry_run_watchdog",
+            action_values(sensor.get("on_release"), "script.stop"),
+            "pump_drawing.on_release must stop dry_run_watchdog — a clock left running "
+            "after the pump stops trips on an idle pump and latches the relay off",
+        )
+
+    def test_draw_session_triggers_on_the_initial_state(self) -> None:
+        """A binary sensor fires no on_press for its first state unless asked to."""
+        sensor = self.pump_drawing
+        self.assertTrue(
+            sensor.get("trigger_on_initial_state") or sensor.get("publish_initial_state"),
+            "pump_drawing must set trigger_on_initial_state — ESPHome gates the first "
+            "state's callbacks, so a device that boots into a running pump (which "
+            "RESTORE_DEFAULT_ON guarantees after a power blip) gets no on_press and "
+            "leaves that entire session unguarded",
+        )
+
+    def test_draw_session_bridges_the_pressure_switch_cycling(self) -> None:
+        """Without the bridge every pressure-switch gap restarts the session clock."""
+        bridges = [
+            parse_duration(self.substitute(str(entry["delayed_off"])))
+            for entry in self.pump_drawing.get("filters") or []
+            if isinstance(entry, dict) and "delayed_off" in entry
+        ]
+        self.assertEqual(
+            bridges,
+            [parse_duration(self.subs["pump_cycle_bridge"])],
+            "pump_drawing must carry exactly one delayed_off of ${pump_cycle_bridge}",
+        )
+
+    def test_draw_threshold_clears_the_base_package_standby_floor(self) -> None:
+        """A threshold under the floor is unreachable, so the guard would never arm."""
+        threshold = float(self.subs["pump_draw_min_w"])
+        self.assertGreater(
+            threshold,
+            PLUG_STANDBY_FLOOR_W,
+            f"pump_draw_min_w is {threshold} W, at or under the base package's "
+            f"{PLUG_STANDBY_FLOOR_W} W standby suppression",
+        )
+        self.assertIn(
+            "${pump_draw_min_w}",
+            str(self.pump_drawing.get("lambda", "")),
+            "pump_drawing must read the substituted threshold, not a hardcoded literal",
+        )
 
     def test_dry_run_timeout_clears_the_grow_app_run_clamp(self) -> None:
         timeout = parse_duration(self.subs["dry_run_timeout"])
