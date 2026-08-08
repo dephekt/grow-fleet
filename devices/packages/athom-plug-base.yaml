@@ -26,7 +26,8 @@
 #   - its mqtt on_connect _ui/config publish (appended after this package's
 #     _firmware/config publish by ESPHome's package list merge)
 # Optional overrides: current_limit (default "16"), sensor_update_interval,
-# or any dict-merge key (e.g. wifi/mqtt reboot_timeout).
+# current_noise_floor / power_noise_floor, or any dict-merge key (e.g. wifi/mqtt
+# reboot_timeout).
 #
 # Do NOT pass firmware_version/package_owner via `!include ... vars:` —
 # package vars would shadow the `-s` CLI substitutions that
@@ -45,6 +46,10 @@ substitutions:
   firmware_update_token: !secret firmware_update_token
   sensor_update_interval: "10s"
   current_limit: "16"
+  # Readings below these floor to zero, so a load under them is indistinguishable
+  # from nothing plugged in — lower them on any device whose real draw is small.
+  current_noise_floor: "0.060"
+  power_noise_floor: "3.0"
   # Self-validating defaults — a device that forgets to override these still
   # passes the substitution pass with an obvious placeholder name.
   power_sensor_name: "Power"
@@ -180,8 +185,8 @@ sensor:
       icon: mdi:current-ac
       filters:
         - throttle_average: ${sensor_update_interval}
-        # Suppress noise below 60 mA (relay leakage)
-        - lambda: if (x < 0.060) return 0.0; else return x;
+        # Suppress relay leakage (${current_noise_floor} A).
+        - lambda: if (x < ${current_noise_floor}) return 0.0; else return x;
       # Safety trip on RAW samples (~1 s), not the published value: the
       # throttle_average above would dilute a short fault below the threshold
       # and delay detection by up to 10 s. The response is the device's call —
@@ -210,8 +215,8 @@ sensor:
       icon: ${power_icon}
       filters:
         - throttle_average: ${sensor_update_interval}
-        # Suppress standby noise below 3 W
-        - lambda: if (x < 3.0) return 0.0; else return x;
+        # Suppress standby noise (${power_noise_floor} W).
+        - lambda: if (x < ${power_noise_floor}) return 0.0; else return x;
 
     energy:
       name: "Energy"

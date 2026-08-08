@@ -45,6 +45,10 @@ substitutions:
   # cycled fan is a continuous load; 12 A also clears any realistic inline-fan
   # motor inrush.
   current_limit: "12"
+  # This fan draws under the baseline's 60 mA / 3 W floors, so the defaults
+  # reported a running fan as zero and hid whether it was moving air at all.
+  current_noise_floor: "0.002"
+  power_noise_floor: "0.2"
 
 packages:
   athom_plug: !include packages/athom-plug-base.yaml
