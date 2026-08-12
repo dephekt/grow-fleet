@@ -34,6 +34,16 @@ devices:
     assets:
       - assets/thermal_overlay.js
     component_dependency: *stackdrift_esphome_components
+  feather-air-monitor:
+    config: devices/feather-air-monitor.yaml
+    esphome_name: feather-air-monitor
+    node_id: feather-air-monitor
+    project_name: stackdrift.feather-air-monitor
+    package: feather-air-monitor
+    package_owner: stackdrift-firmware
+    chip_family: ESP32-S2
+    release: true
+    component_dependency: *stackdrift_esphome_components
   exhaust-fan:
     config: devices/exhaust-fan.yaml
     esphome_name: exhaust-fan
