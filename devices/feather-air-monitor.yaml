@@ -1,0 +1,272 @@
+# External air reference — Adafruit ESP32-S2 Reverse TFT Feather (product 5345)
+# with an SHT45 (PTFE), sited OUTSIDE the tent in the surrounding room.
+#
+# Recommissioned 2026-08-12. This node previously carried the tent's canopy air
+# temp/RH over MQTT for the AtomS3U rig to republish; that job moved to a 7Semi
+# SHT45 on the rig's own I²C bus (1773f1a) and the rig no longer subscribes to
+# anything here. Its new and only job is measuring the ROOM, which is what the
+# exhaust fan draws from — so it answers "will venting actually dry the tent?"
+# instead of being inferred after the fact.
+#
+# Everything it publishes is therefore prefixed `Ext`. Two air sensors both
+# publishing object_ids `temperature`/`humidity` is exactly how a room reading
+# gets presented as a canopy reading; grow-app's CLIMATE resolver falls back to
+# ambient temperature, so an unprefixed sensor here could capture the tent's card
+# if the rig ever dropped out.
+#
+# The built-in 240x135 IPS ST7789 shows Temp / RH / VPD locally.
+#
+# Hardware pins (Reverse TFT Feather 5345, from the arduino variant header):
+#   TFT_I2C_POWER = GPIO7   (gates power to BOTH the STEMMA-QT/I²C bus AND the TFT)
+#   TFT backlight = GPIO45
+#   I²C: SDA=GPIO3  SCL=GPIO4              SHT45 @ 0x44
+#   TFT: CS=GPIO42  DC=GPIO40  RESET=GPIO41  SPI: SCK=GPIO36  MOSI=GPIO35
+#
+# Build / flash:
+#   make build feather-air-monitor
+#   esphome run devices/feather-air-monitor.yaml --device /dev/ttyACM0
+
+substitutions:
+  devicename: feather-air-monitor
+  friendlyname: "Feather Air Monitor"
+  firmware_version: dev
+  grow_app_base_url: "http://192.168.8.3:3080"
+  package_owner: stackdrift-firmware
+  firmware_update_token: !secret firmware_update_token
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${friendlyname}
+  project:
+    name: stackdrift.feather-air-monitor
+    version: ${firmware_version}
+  on_boot:
+    # Power the STEMMA-QT (I²C) + TFT rail BEFORE the I²C/SPI buses and the SHT45
+    # set up (priority above BUS=1000), so the sensor and screen come up cleanly.
+    # Raw GPIO writes avoid any output-component setup-ordering race.
+    - priority: 1100
+      then:
+        - lambda: |-
+            gpio_set_direction((gpio_num_t) 7, GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t) 7, 1);     // TFT_I2C_POWER: enable STEMMA-QT (I²C) + TFT power
+            gpio_set_direction((gpio_num_t) 45, GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t) 45, 1);    // TFT backlight on
+
+esp32:
+  board: adafruit_feather_esp32s2_reversetft
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG            # DEBUG during bring-up to see the I²C scan + live values
+  hardware_uart: USB_CDC  # ESP32-S2 native USB (no UART bridge)
+
+# Native HA API removed fleet-wide: HA is unused and MQTT is the sole transport.
+# (On atlas the api component's WiFi/encryption loop load was jittering shared I2C.)
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: "${grow_app_base_url}/api/firmware/devices/${devicename}/manifest?token=${firmware_update_token}"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+# MQTT -> site broker (mosquitto-site on media-server), same pattern as the rest
+# of the fleet. HA stays an optional observer via api: above.
+mqtt:
+  broker: 192.168.8.3
+  port: 1883
+  username: edge-daniel-home
+  password: !secret mqtt_password
+  topic_prefix: grow/daniel-home/feather-air-monitor
+  discovery: true
+  discovery_prefix: grow/daniel-home/_discovery
+  log_topic:
+    topic: grow/daniel-home/feather-air-monitor/debug
+    level: NONE
+  on_connect:
+    - delay: 2s
+    - mqtt.publish:
+        topic: grow/daniel-home/feather-air-monitor/_firmware/config
+        retain: true
+        qos: 1
+        payload: |-
+          {
+            "schema": "grow-firmware-device.v1",
+            "nodeId": "feather-air-monitor",
+            "projectName": "stackdrift.feather-air-monitor",
+            "packageOwner": "${package_owner}",
+            "package": "feather-air-monitor",
+            "device": "feather-air-monitor",
+            "chipFamily": "ESP32-S2",
+            "installedVersion": "${firmware_version}",
+            "manifestUrl": "${grow_app_base_url}/api/firmware/devices/feather-air-monitor/manifest"
+          }
+    - mqtt.publish:
+        topic: grow/daniel-home/feather-air-monitor/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {"schema":"grow-ui.v2","nodeId":"${devicename}",
+          "groups":[
+          {"i":"overview","t":"External Air","n":10,"v":"metrics","s":"dashboard","p":true},
+          {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
+          {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}
+          ],
+          "entities":[
+          {"c":"sensor","o":"ext_temperature","g":"overview","r":"metric","n":10,"l":"Ext. Temperature"},
+          {"c":"sensor","o":"ext_humidity","g":"overview","r":"metric","n":20,"l":"Ext. Humidity"},
+          {"c":"sensor","o":"ext_vpd","g":"overview","r":"metric","n":30,"l":"Ext. VPD"},
+          {"c":"button","o":"restart","g":"maintenance","n":10},
+          {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
+          {"c":"sensor","o":"uptime","g":"diagnostics","n":20},
+          {"c":"sensor","o":"ip_address","g":"diagnostics","n":30}
+          ]}
+
+web_server:
+  version: 3
+  port: 80
+
+i2c:
+  sda: 3             # STEMMA-QT SDA
+  scl: 4             # STEMMA-QT SCL
+  frequency: 100kHz  # conservative for the long QwiicBus / ethernet differential run
+  scan: true
+
+spi:
+  clk_pin: GPIO36
+  mosi_pin: GPIO35
+
+# ---------------- Sensors ----------------
+sensor:
+  # SHT45 — room air OUTSIDE the tent. The `Ext` prefix is load-bearing: the tent's own
+  # air temp/RH now come from the 7Semi SHT45 on the AtomS3U rig's local I²C bus, and
+  # object_ids of plain temperature/humidity on two air sensors is how a room reading
+  # ends up presented as a canopy reading. Names stay dot-free because ESPHome derives
+  # object_id from name — the display form "Ext. Temperature" is set as a label in the
+  # _ui/config fragment instead.
+  - platform: sht4x
+    address: 0x44
+    temperature:
+      name: "Ext Temperature"
+      id: sht45_temperature
+      accuracy_decimals: 2
+    humidity:
+      name: "Ext Humidity"
+      id: sht45_humidity
+      accuracy_decimals: 2
+    update_interval: 10s
+
+  # Ext VPD — Tetens saturation-vapor-pressure form (temp + humidity only, kPa), the same
+  # formula the rig's scd4x_stats uses, so room and tent VPD are directly comparable.
+  # This is the room's deficit, NOT the plants'.
+  - platform: template
+    name: "Ext VPD"
+    id: air_vpd
+    unit_of_measurement: "kPa"
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      float t = id(sht45_temperature).state;
+      float h = id(sht45_humidity).state;
+      if (isnan(t) || isnan(h)) return NAN;
+      float svp = 0.6108f * expf((17.27f * t) / (t + 237.3f));
+      return svp * (1.0f - h / 100.0f);
+
+  # Diagnostics
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    entity_category: diagnostic
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+
+# ---------------- TFT (built-in 240x135 IPS ST7789) ----------------
+# Only two colours now: the status palette went with the grow-band VPD colouring, which
+# does not apply to room air.
+color:
+  - { id: c_white, red: 100%, green: 100%, blue: 100% }
+  - { id: c_dim,   red: 60%,  green: 60%,  blue: 60% }
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_label
+    size: 18
+  - file: "gfonts://Roboto"
+    id: font_big
+    size: 40
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 22
+
+display:
+  - platform: st7789v
+    model: Custom
+    # Native panel is 135(w) x 240(h) with a display offset; rotated to landscape.
+    # offset_width/offset_height 52/40 confirmed on hardware — the readout fills
+    # the panel cleanly with no wraparound.
+    height: 240
+    width: 135
+    offset_width: 52
+    offset_height: 40
+    cs_pin: GPIO42
+    dc_pin: GPIO40
+    reset_pin: GPIO41
+    rotation: 270
+    update_interval: 1s
+    lambda: |-
+      it.fill(Color::BLACK);
+      float t = id(sht45_temperature).state;
+      float h = id(sht45_humidity).state;
+      float v = id(air_vpd).state;
+
+      // Top-left: TEMP
+      it.printf(6, 2, id(font_label), id(c_dim), "TEMP");
+      if (!isnan(t)) it.printf(6, 20, id(font_big), id(c_white), "%.1f°C", t);
+      else           it.printf(6, 20, id(font_big), id(c_dim), "--.-");
+
+      // Top-right: RH (right-aligned so 100% doesn't clip the panel's right edge)
+      it.printf(234, 2, id(font_label), id(c_dim), TextAlign::TOP_RIGHT, "RH");
+      if (!isnan(h)) it.printf(234, 20, id(font_big), id(c_white), TextAlign::TOP_RIGHT, "%.0f%%", h);
+      else           it.printf(234, 20, id(font_big), id(c_dim), TextAlign::TOP_RIGHT, "--");
+
+      // Bottom: external VPD. Deliberately NOT colour-coded against the grow band that was
+      // here before — this is room air, not canopy air, and a room sitting comfortably at
+      // 1.6 kPa would read permanently red against a band meant for plants.
+      it.printf(6, 78, id(font_label), id(c_dim), "EXT VPD");
+      auto vc = isnan(v) ? id(c_dim) : id(c_white);
+      if (!isnan(v)) it.printf(6, 96, id(font_big), vc, "%.2f", v);
+      else           it.printf(6, 96, id(font_big), vc, "--.--");
+      it.printf(150, 108, id(font_small), id(c_dim), "kPa");
+
+# ---------------- Controls ----------------
+button:
+  - platform: template
+    name: "Check Firmware Update"
+    entity_category: diagnostic
+    on_press:
+      - update.check:
+          id: firmware_update
+  - platform: restart
+    name: "Restart"
