@@ -116,11 +116,16 @@
 #   Misting Threshold is a number entity rather than a build-time constant
 #   precisely because the observation phase is what calibrates it: watch
 #   Humidifier Power against the T7's own display and move the threshold to sit
-#   between resting and misting draw, without a reflash. Its default clears the
-#   3 W meter floor by a wide margin and is a guess until then. The wattage
-#   series is the ground truth; `misting` is the convenience view, and its
-#   ${misting_grace} spin-up grace means a mist burst shorter than that never
-#   registers as one.
+#   between resting and misting draw, without a reflash — which is how it was cut
+#   from 20 W to 5 W once the T7's real behaviour was measured.
+#
+#   That behaviour: on setting 6 it ramps output 1->6 over ~10 s, holds, then
+#   ramps back down as its own reading approaches target and stops, often
+#   re-firing 20-30 s later once the fans have spread the mist. Draw is
+#   proportional to level, roughly 12-15 W at level 1-2 against ~68 W at level 6,
+#   so a threshold set for the top of the ramp reads the bottom of it as idle.
+#   The wattage series is the ground truth and `misting` is the convenience view;
+#   see the binary_sensor for why it now carries no edge filters at all.
 #
 # Annunciators: Watchdog Trip and Overcurrent Fault are separate entities over
 # separate runtime flags, never the relay's single error status. Both latch, and
@@ -165,9 +170,6 @@ substitutions:
   # the Misting Threshold entity. Mirrors grow-app's HUMIDIFIER_MISTING_MIN_W,
   # which is only the plug card's default and does not follow the entity.
   misting_min_w: "20"
-  # Two metering intervals: power is averaged over ${sensor_update_interval},
-  # so anything shorter reads the ramp, not the load.
-  misting_grace: 20s
 
 esphome:
   name: ${devicename}
@@ -578,6 +580,23 @@ binary_sensor:
 
   # Relay closed and drawing above the threshold: the transducers are running.
   # Deliberately not a device_class problem — see the header.
+  # NO FILTERS, either edge. This is a pure function of the published power
+  # series, so its resolution is exactly the meter's ${sensor_update_interval}
+  # average and nothing else.
+  #
+  # It carried a rising-edge grace when it was a FAULT detector and had to not
+  # cry wolf during spin-up. As a state sensor that grace only deleted the front
+  # of every episode: the T7 ramps its output 1->6 over ~10 s and re-fires in
+  # bursts as short as 30 s, so a 20 s grace dropped the entire leading ramp and
+  # any short burst with it. The ramp IS the load, not a transient ahead of it.
+  #
+  # And no falling-edge bridge, though irrigation-pump's pump_drawing carries one
+  # for what looks like the same shape. It is not: that bridge spans a pressure
+  # switch cycling WITHIN one irrigation shot, where the shot is the unit of
+  # interest. Here the zero gaps between bursts are the T7 genuinely stopping and
+  # re-deciding 20-30 s later once the fans have spread the mist — real events, and
+  # the re-fire cadence is itself a reading on how its sensor disagrees with ours.
+  # Bridging would merge them and erase exactly that.
   - platform: template
     name: "Misting"
     id: misting
@@ -587,11 +606,6 @@ binary_sensor:
       if (std::isnan(threshold))
         return false;
       return id(humidifier_relay).state && id(plug_power).state >= threshold;
-    filters:
-      # Rising edge only. The falling edge is left honest: the meter's own
-      # ${sensor_update_interval} average already damps it, and smearing it
-      # would overstate every run in the record this phase exists to build.
-      - delayed_on: ${misting_grace}
 
   # One flag each, never the relay's shared error status: an overcurrent read off
   # that status would annunciate as "grow-app is not driving this relay", a claim

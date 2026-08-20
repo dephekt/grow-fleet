@@ -461,38 +461,27 @@ class HumidifierWatchdogTest(unittest.TestCase):
         relay, which only grow-app knows."""
         self.assertIsNone(self.binary_sensor("misting").get("device_class"))
 
-    def test_misting_waits_out_the_metering_average_but_not_the_run(self) -> None:
-        """The grace exists because the meter averages over
-        ${sensor_update_interval}; every second of it is also a mist burst the
-        record cannot see, so it stays as short as that average allows."""
-        sensor = self.binary_sensor("misting")
-        graces = [
-            parse_duration(self.substitute(str(entry["delayed_on"])))
-            for entry in sensor.get("filters") or []
-            if isinstance(entry, dict) and "delayed_on" in entry
-        ]
-        self.assertEqual(
-            graces,
-            [parse_duration(self.subs["misting_grace"])],
-            "misting must carry exactly one delayed_on of ${misting_grace}",
-        )
-        interval = parse_duration(self.subs["sensor_update_interval"])
-        self.assertGreater(
-            graces[0],
-            interval,
-            "a grace inside one metering interval reads the ramp, not the load",
-        )
-        self.assertLessEqual(
-            graces[0],
-            3 * interval,
-            "the grace is also the shortest mist burst the record can hold — "
-            "widening it quietly deletes short cycles from the observation",
-        )
-        self.assertFalse(
-            [e for e in sensor.get("filters") or [] if isinstance(e, dict) and "delayed_off" in e],
-            "the falling edge stays honest; smearing it overstates every run",
-        )
+    def test_misting_carries_no_edge_filters(self) -> None:
+        """The sensor is a pure function of the published power series, so its
+        resolution is the meter's throttle_average and nothing else.
 
+        It used to carry a 20 s delayed_on, sized when it was a FAULT detector
+        that had to not cry wolf during spin-up. As a state sensor that only
+        deleted the front of every episode: the T7 ramps its output 1->6 over
+        ~10 s and re-fires in bursts as short as 30 s, so the grace dropped the
+        whole leading ramp and any short burst with it. The ramp IS the load.
+
+        And no delayed_off, though irrigation-pump's pump_drawing carries one for
+        what looks like the same shape. It is not the same: that bridge spans a
+        pressure switch cycling WITHIN one shot, where the shot is the unit of
+        interest. Here the zero gaps are the T7 genuinely stopping and re-deciding
+        once the fans have spread the mist, and the re-fire cadence is itself a
+        reading on how far its sensor disagrees with ours. Bridging erases it.
+        """
+        self.assertFalse(
+            self.binary_sensor("misting").get("filters"),
+            "misting must report the power series as measured, both edges",
+        )
 
 if __name__ == "__main__":
     unittest.main()
