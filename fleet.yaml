@@ -71,6 +71,19 @@ devices:
     release: true
     assets: *athom_plug_assets
     component_dependency: *stackdrift_esphome_components
+  humidifier:
+    config: devices/humidifier.yaml
+    esphome_name: humidifier
+    node_id: humidifier
+    project_name: stackdrift.humidifier
+    package: humidifier
+    package_owner: stackdrift-firmware
+    # Athom Smart Plug V3 is ESP32-C3, NOT the ESP8285 the other four plugs are.
+    # It therefore does not consume packages/athom-plug-base.yaml and carries no
+    # athom_plug_assets — see the device config's header.
+    chip_family: ESP32-C3
+    release: true
+    # no component_dependency: this config declares no external_components
   irrigation-pump:
     config: devices/irrigation-pump.yaml
     esphome_name: irrigation-pump
