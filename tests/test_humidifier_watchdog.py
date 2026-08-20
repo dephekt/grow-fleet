@@ -121,12 +121,15 @@ class HumidifierWatchdogTest(unittest.TestCase):
                 return entry
         raise AssertionError("humidifier declares no humidifier_relay switch")
 
+    def number(self, number_id: str) -> dict[str, Any]:
+        for entry in self.config.get("number", []):
+            if isinstance(entry, dict) and entry.get("id") == number_id:
+                return entry
+        raise AssertionError(f"humidifier declares no {number_id} number")
+
     @property
     def timeout(self) -> dict[str, Any]:
-        for entry in self.config.get("number", []):
-            if isinstance(entry, dict) and entry.get("id") == "command_watchdog":
-                return entry
-        raise AssertionError("humidifier declares no command_watchdog number")
+        return self.number("command_watchdog")
 
     def binary_sensor(self, sensor_id: str) -> dict[str, Any]:
         for entry in self.config.get("binary_sensor", []):
@@ -255,10 +258,18 @@ class HumidifierWatchdogTest(unittest.TestCase):
 
     # ── Fail-dry and the load ─────────────────────────────────────────────────
 
-    def test_relay_never_resumes_misting_after_a_power_blip(self) -> None:
-        """Across a reboot the loop's intent is unknowable, and it re-commands
-        within a tick if it still wants humidity."""
-        self.assertEqual(self.relay.get("restore_mode"), "ALWAYS_OFF")
+    def test_relay_restores_its_pre_blip_state_and_flushes_both_edges(self) -> None:
+        """RESTORE_DEFAULT_OFF is only safe because the watchdog bounds an
+        unsupervised resume; the flush is what makes the restored state the real
+        one rather than whatever the 1 h preference interval last happened to
+        catch."""
+        self.assertEqual(self.relay.get("restore_mode"), "RESTORE_DEFAULT_OFF")
+        for edge in ("on_turn_on", "on_turn_off"):
+            self.assertIn(
+                "global_preferences->sync",
+                " ".join(str(v) for v in action_values(self.relay.get(edge), "lambda")),
+                f"humidifier_relay.{edge} must flush, or a blip restores a stale state",
+            )
 
     def test_overcurrent_opens_the_relay(self) -> None:
         self.assertIn(
@@ -267,39 +278,61 @@ class HumidifierWatchdogTest(unittest.TestCase):
         )
 
     def test_misting_threshold_clears_the_base_package_standby_floor(self) -> None:
-        """A threshold under the floor is unreachable, so a dry tank would read
-        as normal misting forever."""
-        threshold = float(self.subs["misting_min_w"])
+        """A threshold under the floor is unreachable, so an idle T7 would read
+        as misting forever."""
+        threshold = float(self.substitute(str(self.number("misting_threshold")["initial_value"])))
         self.assertGreater(
             threshold,
             PLUG_STANDBY_FLOOR_W,
-            f"misting_min_w is {threshold} W, at or under the base package's "
-            f"{PLUG_STANDBY_FLOOR_W} W standby suppression",
-        )
-        self.assertIn(
-            "${misting_min_w}",
-            str(self.binary_sensor("not_misting").get("lambda", "")),
-            "not_misting must read the substituted threshold, not a hardcoded literal",
+            f"the Misting Threshold default is {threshold} W, at or under the base "
+            f"package's {PLUG_STANDBY_FLOOR_W} W standby suppression",
         )
 
-    def test_not_misting_waits_out_the_spin_up(self) -> None:
-        """The head takes a moment to raise a mist and the meter averages over
-        ${sensor_update_interval}; without the grace every start reads as a fault."""
+    def test_misting_reads_the_tunable_threshold_not_a_baked_constant(self) -> None:
+        """The observation phase is what calibrates the threshold, so it has to
+        move without a reflash -- and a NaN restore must not read as misting."""
+        lam = str(self.binary_sensor("misting").get("lambda", ""))
+        self.assertIn("id(misting_threshold).state", lam)
+        self.assertIn("isnan", lam, "an unrestored threshold must not read as misting")
+        self.assertTrue(self.number("misting_threshold").get("restore_value"))
+
+    def test_misting_is_a_plain_state_not_a_fault(self) -> None:
+        """Through the observation phase an idle T7 is the humidistat resting.
+        A problem class would sit red for most of every day and feed grow-app's
+        alert conditions with it; whether idle is a fault depends on who owns the
+        relay, which only grow-app knows."""
+        self.assertIsNone(self.binary_sensor("misting").get("device_class"))
+
+    def test_misting_waits_out_the_metering_average_but_not_the_run(self) -> None:
+        """The grace exists because the meter averages over
+        ${sensor_update_interval}; every second of it is also a mist burst the
+        record cannot see, so it stays as short as that average allows."""
+        sensor = self.binary_sensor("misting")
         graces = [
             parse_duration(self.substitute(str(entry["delayed_on"])))
-            for entry in self.binary_sensor("not_misting").get("filters") or []
+            for entry in sensor.get("filters") or []
             if isinstance(entry, dict) and "delayed_on" in entry
         ]
         self.assertEqual(
             graces,
             [parse_duration(self.subs["misting_grace"])],
-            "not_misting must carry exactly one delayed_on of ${misting_grace}",
+            "misting must carry exactly one delayed_on of ${misting_grace}",
         )
+        interval = parse_duration(self.subs["sensor_update_interval"])
         self.assertGreater(
             graces[0],
-            parse_duration(self.subs["sensor_update_interval"]),
-            "the grace must outlast one metering interval or the first averaged "
-            "sample of a healthy start still reads as a fault",
+            interval,
+            "a grace inside one metering interval reads the ramp, not the load",
+        )
+        self.assertLessEqual(
+            graces[0],
+            3 * interval,
+            "the grace is also the shortest mist burst the record can hold — "
+            "widening it quietly deletes short cycles from the observation",
+        )
+        self.assertFalse(
+            [e for e in sensor.get("filters") or [] if isinstance(e, dict) and "delayed_off" in e],
+            "the falling edge stays honest; smearing it overstates every run",
         )
 
 

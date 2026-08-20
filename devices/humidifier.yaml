@@ -7,12 +7,19 @@
 # diagnostics) lives in packages/athom-plug-base.yaml; this file holds the
 # humidifier's safety contract.
 #
-# Role:
-#   The T7 runs in its own always-on mode at a fixed output — its onboard
-#   humidistat hangs in the tent and reads consistently off the SHT45s, so it is
-#   deliberately given no say. grow-app's climate loop owns the relay: it
-#   engages at the 1.2 kPa air-VPD hard ceiling and releases at the week's
-#   target, on the tent's real readings.
+# Role, in two phases:
+#   OBSERVATION (now): the relay stays closed and the T7 runs on its own
+#     humidistat, which hangs in the tent and reads consistently off the SHT45s.
+#     Nothing here commands anything; the point is the `misting` signal below,
+#     which turns the plug's wattage into a record of when the T7 decided to run
+#     — and therefore of how it answers our over-exhausting. Set Cut Off After
+#     to 0 for this phase: with no loop driving the relay there is no absence
+#     for the watchdog to detect, and it would just cut power every 5 minutes.
+#   ARMED (later): grow-app's climate loop takes the relay — engage at the
+#     1.2 kPa air-VPD hard ceiling, release at the week's target, on the tent's
+#     real readings — and the T7 goes to a fixed output with no say. Arming the
+#     loop on /climate and restoring Cut Off After to ${watchdog_default} are
+#     the same act; neither is much use without the other.
 #
 # Watchdog contract (the reason this file is not just a relay):
 #   This is the fleet's first purely loop-owned actuator. exhaust-fan and
@@ -38,9 +45,13 @@
 #   the timeout. Intended: the humidifier is a supervised load either way.
 #
 # Relay contract:
-#   - restore_mode ALWAYS_OFF: a power blip resumes NOTHING. The loop's state is
-#     unknowable across a reboot, and it re-commands within a tick if it still
-#     wants humidity, so there is no reason to come back misting.
+#   - restore_mode RESTORE_DEFAULT_OFF, flushed on every transition so the
+#     restored state is the true pre-blip one rather than a stale hourly copy.
+#     Not ALWAYS_OFF, which is the tempting choice for a fail-dry actuator: in
+#     the observation phase it would leave the T7 dark after any blip until
+#     somebody noticed, and in the armed phase the watchdog already bounds an
+#     unsupervised resume to ${watchdog_default} minutes. A bounded resume beats
+#     an unbounded outage in both directions.
 #   - Overcurrent (raw sample > ${current_limit} A, detected in the base
 #     package): relay off. It does NOT latch, unlike exhaust-fan's: there is no
 #     arm here to disarm, and the loop will re-command after its 300 s minimum
@@ -51,14 +62,26 @@
 #     under an amp, so anything near 5 A is already a fault the 12 A limit would
 #     sail past.
 #
-# Not-misting detection:
-#   Relay closed and drawing under ${misting_min_w} W means the tank is dry or
-#   the T7's own panel switched it off — the loop would otherwise sit there
-#   commanding a humidifier that cannot humidify. Annunciated only; an idle
-#   ultrasonic head is not a hazard. ${misting_min_w} clears the base package's
-#   3 W meter floor by enough to survive standby draw and is deliberately far
-#   under the T7's misting draw — re-tune it once Humidifier Power has been
-#   watched for a grow, and move grow-app's HUMIDIFIER_MISTING_MIN_W with it.
+# Misting detection:
+#   The T7 draws whenever it is plugged in — display, fan, pump — and draws
+#   materially more with the ultrasonic transducers running, so a closed relay
+#   says nothing about whether the tent is actually getting water. `misting`
+#   thresholds the plug's own metering to answer that, and it is a plain state,
+#   NOT a device_class problem: through the observation phase an idle T7 is the
+#   humidistat resting, not a fault, and a problem class would sit red for most
+#   of every day and feed grow-app's alert conditions with it. When the loop
+#   owns the relay the same signal reads as the fault it becomes — commanded on
+#   and not misting is a dry tank or a panel switched off — but that reading is
+#   grow-app's to make, because only grow-app knows who owns the relay.
+#
+#   Misting Threshold is a number entity rather than a build-time constant
+#   precisely because the observation phase is what calibrates it: watch
+#   Humidifier Power against the T7's own display and move the threshold to sit
+#   between resting and misting draw, without a reflash. Its default clears the
+#   base package's 3 W meter floor by a wide margin and is a guess until then.
+#   The wattage series is the ground truth; `misting` is the convenience view,
+#   and its ${misting_grace} spin-up grace means a mist burst shorter than that
+#   never registers as one.
 #
 # Time: the base package's sntp is baked to America/Chicago, which is all
 # total_daily_energy needs for a local-midnight reset. No schedule and no
@@ -85,11 +108,13 @@ substitutions:
   # Minutes of MQTT silence that open the relay; 0 disables. Mirrors grow-app's
   # HUMIDIFIER_WATCHDOG_MINUTES, which sizes its keepalive against this.
   watchdog_default: "5"
-  # Draw below which a closed relay is not actually misting. Mirrors grow-app's
-  # HUMIDIFIER_MISTING_MIN_W.
-  misting_min_w: "20.0"
-  # Spin-up grace before a quiet meter counts as a fault.
-  misting_grace: 60s
+  # Initial draw above which a closed relay counts as misting; tunable live via
+  # the Misting Threshold entity. Mirrors grow-app's HUMIDIFIER_MISTING_MIN_W,
+  # which is only the plug card's default and does not follow the entity.
+  misting_min_w: "20"
+  # Two metering intervals: the base package averages power over
+  # ${sensor_update_interval}, so anything shorter reads the ramp, not the load.
+  misting_grace: 20s
 
 packages:
   athom_plug: !include packages/athom-plug-base.yaml
@@ -135,7 +160,7 @@ mqtt:
           {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
           {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
           "entities":[
-          {"c":"binary_sensor","o":"not_misting","g":"overview","r":"metric","n":5,"l":"Not Misting"},
+          {"c":"binary_sensor","o":"misting","g":"overview","r":"metric","n":5,"l":"Misting"},
           {"c":"binary_sensor","o":"watchdog_trip","g":"overview","r":"metric","n":6,"l":"Watchdog Trip"},
           {"c":"sensor","o":"humidifier_power","g":"overview","r":"metric","n":10,"l":"Power"},
           {"c":"sensor","o":"voltage","g":"overview","r":"metric","n":20},
@@ -143,6 +168,7 @@ mqtt:
           {"c":"sensor","o":"total_daily_energy","g":"overview","r":"metric","n":40,"l":"Daily Energy"},
           {"c":"switch","o":"${relay_object_id}","g":"controls","r":"quick-control","n":10,"l":"Humidifier"},
           {"c":"number","o":"command_watchdog","g":"safety","n":10,"l":"Cut Off After (min, 0 = off)"},
+          {"c":"number","o":"misting_threshold","g":"safety","n":20,"l":"Misting Threshold (W)"},
           {"c":"button","o":"check_firmware_update","g":"maintenance","n":10},
           {"c":"button","o":"restart","g":"maintenance","n":20},
           {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
@@ -155,14 +181,20 @@ switch:
     name: "Humidifier"
     id: humidifier_relay
     pin: GPIO12
-    restore_mode: ALWAYS_OFF
+    restore_mode: RESTORE_DEFAULT_OFF
     icon: mdi:air-humidifier
     # Closing the relay is also the rearm: it clears whatever trip annunciator
-    # is standing and starts a fresh countdown. ALWAYS_OFF allocates no
-    # preference for relay state, so there is nothing here to flush.
+    # is standing and starts a fresh countdown. Both edges flush, so the state a
+    # blip restores is the real one — the humidifier transitions a few times an
+    # hour at most, nothing like the erase rate that keeps exhaust-fan's cycle
+    # off the 1 h interval.
     on_turn_on:
-      - lambda: id(humidifier_relay).status_clear_error();
+      - lambda: |-
+          id(humidifier_relay).status_clear_error();
+          global_preferences->sync();
       - script.execute: watchdog_kick
+    on_turn_off:
+      - lambda: global_preferences->sync();
 
 # ─── Watchdog timeout ─────────────────────────────────────────────────────────
 number:
@@ -185,6 +217,22 @@ number:
       - script.execute: watchdog_kick
       - lambda: global_preferences->sync();
 
+  - platform: template
+    name: "Misting Threshold"
+    id: misting_threshold
+    entity_category: config
+    unit_of_measurement: "W"
+    min_value: 0
+    max_value: 200
+    step: 1
+    initial_value: ${misting_min_w}
+    restore_value: true
+    optimistic: true
+    mode: box
+    icon: mdi:flash-alert-outline
+    on_value:
+      - lambda: global_preferences->sync();
+
 # ─── Annunciators ─────────────────────────────────────────────────────────────
 binary_sensor:
   # Short press: toggle the relay (bench / manual). The watchdog still applies.
@@ -197,16 +245,21 @@ binary_sensor:
         then:
           - switch.toggle: humidifier_relay
 
-  # Relay closed, meter quiet: dry tank, or the T7's own panel is off.
+  # Relay closed and drawing above the threshold: the transducers are running.
+  # Deliberately not a device_class problem — see the header.
   - platform: template
-    name: "Not Misting"
-    id: not_misting
-    device_class: problem
+    name: "Misting"
+    id: misting
+    icon: mdi:weather-fog
     lambda: |-
-      return id(humidifier_relay).state && id(plug_power).state < ${misting_min_w};
+      const float threshold = id(misting_threshold).state;
+      if (std::isnan(threshold))
+        return false;
+      return id(humidifier_relay).state && id(plug_power).state >= threshold;
     filters:
-      # The head takes a moment to raise a mist, and the meter averages over
-      # ${sensor_update_interval}; without the grace every start reads as a fault.
+      # Rising edge only. The falling edge is left honest: the meter's own
+      # ${sensor_update_interval} average already damps it, and smearing it
+      # would overstate every run in the record this phase exists to build.
       - delayed_on: ${misting_grace}
 
   # Mirrors the error status the trip raises, so no preference is allocated for
