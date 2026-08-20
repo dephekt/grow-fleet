@@ -46,7 +46,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/dephekt/esphome-components.git
-      ref: 0926abf947d3cba3c43d1bf1d29de7bc054767cd
+      ref: e8cf20174e82fa144377fb219eff6edb96af68e3
       path: .
     components:
       - mlx90640
@@ -266,7 +266,7 @@ web_server:
 mlx90640:
   id: thermal_camera
   address: 0x33
-  refresh_rate: "16Hz"
+  refresh_rate: "2Hz"   # the subpage period has to clear the chunked pixel read, not update_interval
   thermal_palette: "ironblack"
   update_interval: 2000           # milliseconds (component uses a raw int)
   web_server:
@@ -304,6 +304,15 @@ mlx90640:
       name: "MLX90640 ROI Mean temp"
       id: mlx_roi_avg_temp
       web_server: { sorting_group_id: thermal_camera_group, sorting_weight: 60 }
+  # Frame-read timing measurement; remove once the torn-frame question is settled.
+  read_duration:
+    name: "MLX90640 Frame Read"
+    id: mlx_read_duration
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 30 }
+  read_collision:
+    name: "MLX90640 Read Collision"
+    id: mlx_read_collision
+    web_server: { sorting_group_id: diagnostics, sorting_weight: 32 }
   update_interval_control:
     name: "Thermal Update Interval"
     min_value: 100
