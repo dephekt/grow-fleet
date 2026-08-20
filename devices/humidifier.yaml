@@ -67,6 +67,13 @@
 #   who commanded the relay, so a manual run — the physical button, or the
 #   dashboard with the loop unarmed — also ends after the timeout.
 #
+#   It ships ARMED, and deliberately: a safety that defaults off is one nobody
+#   turns on. The cost is a real five-minute window on any plug with no stored
+#   value — a first flash, or after the GPIO3 long-press factory reset — where
+#   the relay opens five minutes in with nothing driving it. Setting the entity
+#   to 0 is durable (it commits to NVS, see the number's on_value), so this is a
+#   one-time step per adoption, not a recurring one.
+#
 # Relay contract:
 #   - restore_mode RESTORE_DEFAULT_OFF, flushed on every transition so the
 #     restored state is the true pre-blip one. Not ALWAYS_OFF, which is the
@@ -77,12 +84,19 @@
 #     (Athom's factory config expresses power-on state as a select plus an
 #     on_boot lambda; ESPHome's own restore_mode says the same thing in one
 #     line, so the select is not reproduced.)
-#   - Overcurrent (raw sample > ${current_limit} A): relay off. It does NOT
-#     latch, unlike exhaust-fan's: there is no arm here to disarm, and the loop
-#     will re-command after its 300 s minimum off. A genuine fault therefore
-#     re-trips every ~5 min, each time for under a second, and says so in the
-#     log and on the status LED — noisy on purpose, since the alternative is a
-#     silent load that never runs.
+#   - Overcurrent (raw sample > ${current_limit} A): relay off, and nothing is
+#     disarmed — unlike exhaust-fan's trip, which latches by disabling the arms
+#     that would re-energize a faulted load ten seconds later. There is no such
+#     arm here, so what happens next depends on the phase, and both readings are
+#     acceptable for different reasons:
+#       ARMED — the loop re-commands after its 300 s minimum off and a genuine
+#         fault re-trips every ~5 min, each time for under a second. Noisy on
+#         purpose: the alternative is a load that silently never runs.
+#       OBSERVATION — nothing ever re-commands, so the relay simply stays open
+#         until a human closes it. That IS a latch, arrived at by absence.
+#     Either way the annunciation carries it: Overcurrent Fault is its own
+#     entity, because the ERROR log reaches nobody here (baud_rate 0, log_topic
+#     NONE, no API) and the status LED cannot say which fault it is.
 #   - ${current_limit} A, not the 16 A Athom ships for a US plug: a tent
 #     humidifier draws under an amp, so anything near 5 A is already a fault the
 #     stock limit would sail past.
@@ -107,6 +121,11 @@
 #   series is the ground truth; `misting` is the convenience view, and its
 #   ${misting_grace} spin-up grace means a mist burst shorter than that never
 #   registers as one.
+#
+# Annunciators: Watchdog Trip and Overcurrent Fault are separate entities over
+# separate runtime flags, never the relay's single error status — that status is
+# raised by both trips to drive the LED, so reading it would report whichever
+# fault happened as the other one.
 #
 # No BLE. Athom's factory config runs esp32_ble_tracker + bluetooth_proxy; this
 # fleet has no use for either and they are the single largest consumer of flash
@@ -271,6 +290,7 @@ mqtt:
           "entities":[
           {"c":"binary_sensor","o":"misting","g":"overview","r":"metric","n":5,"l":"Misting"},
           {"c":"binary_sensor","o":"watchdog_trip","g":"overview","r":"metric","n":6,"l":"Watchdog Trip"},
+          {"c":"binary_sensor","o":"overcurrent_fault","g":"overview","r":"metric","n":7,"l":"Overcurrent Fault"},
           {"c":"sensor","o":"humidifier_power","g":"overview","r":"metric","n":10,"l":"Power"},
           {"c":"sensor","o":"voltage","g":"overview","r":"metric","n":20},
           {"c":"sensor","o":"current","g":"overview","r":"metric","n":30},
@@ -308,7 +328,20 @@ uart:
   stop_bits: 1
   parity: EVEN
 
+# Runtime-only (restore_value: no): a latched fault must not survive the power
+# cycle that clears the condition, and the relay comes back at its restored
+# state either way. Two flags, not one shared error bit — see the relay contract.
 globals:
+  - id: watchdog_latched
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+  - id: overcurrent_latched
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
   - id: total_energy_accum
     type: float
     restore_value: yes
@@ -449,6 +482,8 @@ switch:
     # blip restores is the real one.
     on_turn_on:
       - lambda: |-
+          id(watchdog_latched) = false;
+          id(overcurrent_latched) = false;
           id(humidifier_relay).status_clear_error();
           global_preferences->sync();
       - script.execute: watchdog_kick
@@ -474,6 +509,15 @@ number:
       # Re-arm on the new value so shortening the timeout takes effect on the
       # run in progress rather than at the next command.
       - script.execute: watchdog_kick
+      # delay 0s, and it is load-bearing. TemplateNumber::control() publishes
+      # (which fires this automation) BEFORE it calls pref_.save(), and on ESP32
+      # save() only queues into s_pending_save — sync() is what commits. Flushing
+      # inline would therefore commit everything EXCEPT the value that triggered
+      # it, leaving the new one to wait out flash_write_interval. DelayAction
+      # always routes through the scheduler, even at 0 ms, so this resumes after
+      # control() has returned. Switch::publish_state saves before its callback,
+      # which is why the relay's own flush needs no such dance.
+      - delay: 0s
       - lambda: global_preferences->sync();
 
   - platform: template
@@ -481,7 +525,12 @@ number:
     id: misting_threshold
     entity_category: config
     unit_of_measurement: "W"
-    min_value: 0
+    # Above the 3 W clamp on plug_power, not 0: the clamp floors a resting load
+    # to exactly 0.0, and `0.0 >= 0.0` is true — a threshold of 0 would quietly
+    # turn the misting record into a copy of the relay state. This entity is a
+    # box the operator types into live, so the unreachable range is made
+    # unreachable rather than documented.
+    min_value: 4
     max_value: 200
     step: 1
     initial_value: ${misting_min_w}
@@ -490,6 +539,8 @@ number:
     mode: box
     icon: mdi:flash-alert-outline
     on_value:
+      # Deferred for the same reason as Command Watchdog above.
+      - delay: 0s
       - lambda: global_preferences->sync();
 
 # ─── Button (GPIO3) and annunciators ─────────────────────────────────────────
@@ -535,13 +586,22 @@ binary_sensor:
       # would overstate every run in the record this phase exists to build.
       - delayed_on: ${misting_grace}
 
-  # Mirrors the error status the trip raises, so no preference is allocated for
-  # a second source of truth. Runtime-only: a reboot clears the annunciator.
+  # One flag each, NOT the relay's shared error status. Both trips open the same
+  # relay and both raise that status for the LED, so reading it here would
+  # annunciate an overcurrent as "grow-app is not driving this relay" — a claim
+  # about the network when the fault is electrical, and the two want opposite
+  # responses (the watchdog clears when grow-app returns; this does not).
   - platform: template
     name: "Watchdog Trip"
     id: watchdog_trip
     device_class: problem
-    lambda: return id(humidifier_relay).status_has_error();
+    lambda: return id(watchdog_latched);
+
+  - platform: template
+    name: "Overcurrent Fault"
+    id: overcurrent_fault
+    device_class: problem
+    lambda: return id(overcurrent_latched);
 
 button:
   - platform: template
@@ -598,9 +658,14 @@ script:
                       format: "No command for %.0f min — grow-app is not driving this relay; failing dry"
                       args: [id(command_watchdog).state]
                   - switch.turn_off: humidifier_relay
-                  - lambda: id(humidifier_relay).status_set_error();
+                  # The error status drives the status LED; the flag is what says
+                  # WHICH fault, since both trips raise the same status.
+                  - lambda: |-
+                      id(watchdog_latched) = true;
+                      id(humidifier_relay).status_set_error();
 
-  # Overcurrent response. No latch — see the relay contract in the header.
+  # Overcurrent response. See the relay contract in the header for why it does
+  # not disarm anything.
   - id: overcurrent_trip
     parameters:
       amps: float
@@ -610,7 +675,9 @@ script:
           format: "Overcurrent: %.1f A > ${current_limit} A — humidifier relay off"
           args: [amps]
       - switch.turn_off: humidifier_relay
-      - lambda: id(humidifier_relay).status_set_error();
+      - lambda: |-
+          id(overcurrent_latched) = true;
+          id(humidifier_relay).status_set_error();
 
 # ─── Diagnostics ─────────────────────────────────────────────────────────────
 text_sensor:

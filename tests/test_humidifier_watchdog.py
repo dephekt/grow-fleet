@@ -218,6 +218,53 @@ class HumidifierWatchdogTest(unittest.TestCase):
             "the guarded branch is what opens the relay",
         )
 
+    def test_each_trip_annunciates_as_itself_not_as_the_other(self) -> None:
+        """Both trips open the same relay and both raise its single error status
+        to drive the LED, so a sensor reading that status reports whichever fault
+        happened as the other one. An overcurrent shown as "Watchdog Trip" is a
+        claim about the network when the fault is electrical, and the two want
+        opposite responses -- the watchdog clears when grow-app returns, the
+        overcurrent does not. irrigation-pump avoids the collision by leaving its
+        overcurrent silent; this plug cannot, because its ERROR log reaches
+        nobody (baud_rate 0, log_topic NONE, no API)."""
+        flags = {
+            "watchdog_trip": "watchdog_latched",
+            "overcurrent_fault": "overcurrent_latched",
+        }
+        for sensor_id, flag in flags.items():
+            lam = str(self.binary_sensor(sensor_id).get("lambda", ""))
+            self.assertIn(f"id({flag})", lam)
+            self.assertNotIn(
+                "status_has_error",
+                lam,
+                f"{sensor_id} must read its own flag, not the shared error status",
+            )
+
+        # Each script raises exactly its own flag.
+        for script_id, own in (
+            ("watchdog_kick", "watchdog_latched"),
+            ("overcurrent_trip", "overcurrent_latched"),
+        ):
+            body = " ".join(str(v) for v in action_values(self.script(script_id)["then"], "lambda"))
+            other = next(f for f in flags.values() if f != own)
+            self.assertIn(f"id({own}) = true", body)
+            self.assertNotIn(f"id({other}) = true", body)
+
+    def test_closing_the_relay_clears_both_annunciators(self) -> None:
+        """Closing the relay is the only rearm, so a flag it does not clear is a
+        fault that never goes away -- the globals are restore_value: no, so a
+        reboot is the only other thing that clears them."""
+        body = " ".join(str(v) for v in action_values(self.relay.get("on_turn_on"), "lambda"))
+        for flag in ("watchdog_latched", "overcurrent_latched"):
+            self.assertIn(f"id({flag}) = false", body)
+
+    def test_latched_faults_allocate_no_stored_state(self) -> None:
+        """A latched fault must not survive the power cycle that cleared the
+        condition; the relay comes back at its restored state regardless."""
+        for entry in self.config.get("globals", []):
+            if entry.get("id") in ("watchdog_latched", "overcurrent_latched"):
+                self.assertFalse(entry.get("restore_value"), f"{entry['id']} must not persist")
+
     def test_trip_opens_the_relay_and_raises_the_annunciator(self) -> None:
         """A trip that logs without opening the relay reads exactly like one that
         works, and one that opens it without the error status leaves the
@@ -227,7 +274,7 @@ class HumidifierWatchdogTest(unittest.TestCase):
         self.assertIn(
             "status_set_error",
             " ".join(str(v) for v in action_values(then, "lambda")),
-            "the trip must raise humidifier_relay's error status",
+            "the trip must raise humidifier_relay's error status, which drives the LED",
         )
         self.assertEqual(
             object_id(self.binary_sensor("watchdog_trip")["name"]),
@@ -247,6 +294,36 @@ class HumidifierWatchdogTest(unittest.TestCase):
             f"{GROW_APP_TICK_SECONDS} s keepalives, so a late tick fails the tent dry "
             "while grow-app is perfectly healthy",
         )
+
+    def test_preference_flush_is_deferred_past_the_value_it_is_flushing(self) -> None:
+        """TemplateNumber::control() publishes -- firing on_value -- BEFORE it
+        calls pref_.save(), and on ESP32 save() only queues into s_pending_save
+        while sync() is what commits. An inline flush therefore commits
+        everything EXCEPT the value that triggered it, and the new one waits out
+        flash_write_interval (5 min here).
+
+        That is not cosmetic: the header's own instruction for the observation
+        phase is to set Cut Off After to 0, and losing mains inside that window
+        boots the plug back at 5, whereupon the watchdog opens the relay and the
+        humidifier goes dark -- precisely what the flush exists to prevent.
+
+        Switch::publish_state saves BEFORE its callback, which is why the relay's
+        flush needs no delay and why the asymmetry is easy to miss."""
+        for number_id in ("command_watchdog", "misting_threshold"):
+            actions = self.number(number_id)["on_value"]
+            delays = [i for i, a in enumerate(actions) if "delay" in a]
+            syncs = [
+                i
+                for i, a in enumerate(actions)
+                if "global_preferences->sync" in str(a.get("lambda", ""))
+            ]
+            self.assertTrue(delays, f"{number_id}.on_value must defer its flush")
+            self.assertTrue(syncs, f"{number_id}.on_value must flush at all")
+            self.assertLess(
+                delays[0],
+                syncs[0],
+                f"{number_id} flushes before control() saves — the change is lost",
+            )
 
     def test_watchdog_can_be_disabled_for_bench_work(self) -> None:
         """0 is the documented escape hatch; the countdown's own guard is what
@@ -304,6 +381,18 @@ class HumidifierWatchdogTest(unittest.TestCase):
             PLUG_STANDBY_FLOOR_W,
             f"the Misting Threshold default is {threshold} W, at or under the base "
             f"package's {PLUG_STANDBY_FLOOR_W} W standby suppression",
+        )
+
+    def test_misting_threshold_cannot_be_typed_into_the_clamped_range(self) -> None:
+        """plug_power is clamped to exactly 0.0 below the standby floor, and the
+        misting lambda is `>=`, so a threshold of 0 makes `0.0 >= 0.0` true and
+        the observation record silently becomes a copy of the relay state. The
+        entity is a box the operator types into live, so the unreachable range is
+        made unreachable rather than merely documented."""
+        self.assertGreater(
+            float(self.number("misting_threshold")["min_value"]),
+            PLUG_STANDBY_FLOOR_W,
+            "min_value must sit above the standby clamp",
         )
 
     def test_misting_reads_the_tunable_threshold_not_a_baked_constant(self) -> None:
