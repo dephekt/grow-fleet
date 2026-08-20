@@ -37,8 +37,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from fleetlib import _load_device_config, device_spec  # noqa: E402
 
-BASE_PACKAGE = ROOT / "devices" / "packages" / "athom-plug-base.yaml"
-
 # grow-app's climate tick (GROW_CLIMATE_TICK_SECONDS), which is also the cadence
 # of the keepalive that holds this watchdog off -- see humidifierKeepalive in
 # grow-app's src/lib/server/climate/loop.ts.
@@ -95,10 +93,10 @@ class HumidifierWatchdogTest(unittest.TestCase):
     def setUp(self) -> None:
         self.spec = device_spec("humidifier")
         self.config = _load_device_config(self.spec.config)
-        self.base = _load_device_config(BASE_PACKAGE)
         self.source = self.spec.config.read_text(encoding="utf-8")
-        # The device's own substitutions win over the package defaults it overrides.
-        self.subs = {**self.base.get("substitutions", {}), **self.config.get("substitutions", {})}
+        # Self-contained: this plug is an ESP32-C3 and consumes no package, so every
+        # substitution the assertions below read is declared in the device file itself.
+        self.subs = self.config.get("substitutions", {})
 
     def substitute(self, value: str) -> str:
         for key, replacement in self.subs.items():
@@ -145,7 +143,7 @@ class HumidifierWatchdogTest(unittest.TestCase):
         that topic literally, so a renamed relay silently moves the topic and
         leaves the subscription listening to nothing -- a watchdog that then
         fires on every run instead of never."""
-        prefix = self.substitute(str(self.base["mqtt"]["topic_prefix"]))
+        prefix = self.substitute(str(self.config["mqtt"]["topic_prefix"]))
         expected = f"{prefix}/switch/{object_id(self.relay['name'])}/command"
         topics = [
             self.substitute(str(entry["topic"]))
@@ -257,6 +255,26 @@ class HumidifierWatchdogTest(unittest.TestCase):
         self.assertTrue(self.timeout.get("restore_value"), "the timeout is desired state")
 
     # ── Fail-dry and the load ─────────────────────────────────────────────────
+
+    def test_targets_the_esp32_c3_the_plug_actually_is(self) -> None:
+        """An Athom V3 is an ESP32-C3 and shares NO pin assignment with the
+        ESP8285 V2 the rest of the fleet's plugs are — the V2's button pin is the
+        V3's relay pin. Consuming the ESP8266 plug base here, or copying its pin
+        numbers, produces an image that drives a relay from a pulled-up input."""
+        self.assertNotIn(
+            "athom-plug-base.yaml",
+            str(self.config.get("packages", {})),
+            "the ESP8266 plug baseline cannot be consumed by an ESP32-C3 device",
+        )
+        self.assertEqual(self.config["esp32"]["variant"], "ESP32C3")
+        self.assertNotIn("esp8266", self.config)
+        self.assertEqual(self.relay["pin"], "GPIO5")
+        self.assertEqual(self.config["uart"]["rx_pin"], "GPIO20")
+        self.assertIn(
+            '"chipFamily": "ESP32-C3"',
+            self.source,
+            "the _firmware/config payload feeds grow-app's OTA manifest matching",
+        )
 
     def test_relay_restores_its_pre_blip_state_and_flushes_both_edges(self) -> None:
         """RESTORE_DEFAULT_OFF is only safe because the watchdog bounds an
