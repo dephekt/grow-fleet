@@ -71,6 +71,17 @@ devices:
     release: true
     assets: *athom_plug_assets
     component_dependency: *stackdrift_esphome_components
+  humidifier:
+    config: devices/humidifier.yaml
+    esphome_name: humidifier
+    node_id: humidifier
+    project_name: stackdrift.humidifier
+    package: humidifier
+    package_owner: stackdrift-firmware
+    chip_family: ESP8266
+    release: true
+    assets: *athom_plug_assets
+    # no component_dependency: this config declares no external_components
   irrigation-pump:
     config: devices/irrigation-pump.yaml
     esphome_name: irrigation-pump

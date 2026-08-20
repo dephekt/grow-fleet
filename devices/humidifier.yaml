@@ -1,0 +1,262 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Daniel Snider
+
+# Athom Smart Plug US V2 — Humidifier actuator (AC Infinity CLOUDFORGE T7).
+#
+# The shared plug baseline (hardware map, power metering, MQTT/OTA transport,
+# diagnostics) lives in packages/athom-plug-base.yaml; this file holds the
+# humidifier's safety contract.
+#
+# Role:
+#   The T7 runs in its own always-on mode at a fixed output — its onboard
+#   humidistat hangs in the tent and reads consistently off the SHT45s, so it is
+#   deliberately given no say. grow-app's climate loop owns the relay: it
+#   engages at the 1.2 kPa air-VPD hard ceiling and releases at the week's
+#   target, on the tent's real readings.
+#
+# Watchdog contract (the reason this file is not just a relay):
+#   This is the fleet's first purely loop-owned actuator. exhaust-fan and
+#   grow-light carry their own arms and keep working with grow-app gone; a
+#   humidifier with nobody watching just saturates the tent. So the relay opens
+#   after ${watchdog_default} minutes with no command on its MQTT command topic,
+#   and the fail-safe direction is DRY: with no tent reading we cannot know
+#   whether humidity is wanted, and as dry as the room beats far too humid.
+#
+#   grow-app publishes only on transitions, so the loop re-asserts ON every tick
+#   (10 s) while it is humidifying — see humidifierKeepalive in
+#   src/lib/server/climate/loop.ts. That keepalive is what makes the timeout
+#   mean "grow-app is gone" rather than "the run got long", and the distinction
+#   is load-bearing: the loop re-engages only at 1.2 kPa, so a cut partway
+#   through a run leaves the humidifier off until the tent drifts back OVER the
+#   ceiling it was hired to defend. A watchdog that fires during healthy
+#   operation does not degrade gracefully — it defeats the hysteresis.
+#
+#   The timeout is a number entity, and 0 disables the watchdog. That escape
+#   hatch is for bench work; leaving it at 0 leaves the tent unsupervised.
+#   The watchdog is not aware of who commanded the relay, so a manual run — the
+#   physical button, or the dashboard with the loop unarmed — also ends after
+#   the timeout. Intended: the humidifier is a supervised load either way.
+#
+# Relay contract:
+#   - restore_mode ALWAYS_OFF: a power blip resumes NOTHING. The loop's state is
+#     unknowable across a reboot, and it re-commands within a tick if it still
+#     wants humidity, so there is no reason to come back misting.
+#   - Overcurrent (raw sample > ${current_limit} A, detected in the base
+#     package): relay off. It does NOT latch, unlike exhaust-fan's: there is no
+#     arm here to disarm, and the loop will re-command after its 300 s minimum
+#     off. A genuine fault therefore re-trips every ~5 min, each time for under
+#     a second, and says so in the log and on the status LED — noisy on purpose,
+#     since the alternative is a silent load that never runs.
+#   - ${current_limit} A, not the fleet's usual 12: a tent humidifier draws
+#     under an amp, so anything near 5 A is already a fault the 12 A limit would
+#     sail past.
+#
+# Not-misting detection:
+#   Relay closed and drawing under ${misting_min_w} W means the tank is dry or
+#   the T7's own panel switched it off — the loop would otherwise sit there
+#   commanding a humidifier that cannot humidify. Annunciated only; an idle
+#   ultrasonic head is not a hazard. ${misting_min_w} clears the base package's
+#   3 W meter floor by enough to survive standby draw and is deliberately far
+#   under the T7's misting draw — re-tune it once Humidifier Power has been
+#   watched for a grow, and move grow-app's HUMIDIFIER_MISTING_MIN_W with it.
+#
+# Time: the base package's sntp is baked to America/Chicago, which is all
+# total_daily_energy needs for a local-midnight reset. No schedule and no
+# runtime timezone entity here — there is no wall-clock behavior to reconcile.
+#
+# NOTE for edits: ESP8266 preference offsets are positional, so keep the
+# relative order of the pref-allocating sections (switch, then number).
+#
+# Flash / build:
+#   make build humidifier
+#   esphome run  devices/humidifier.yaml --device /dev/ttyUSB0
+#   esphome logs devices/humidifier.yaml --device /dev/ttyUSB0
+
+substitutions:
+  devicename: humidifier
+  friendlyname: "Humidifier"
+  power_sensor_name: "Humidifier Power"
+  power_icon: mdi:air-humidifier
+  current_limit: "5"
+  # objectId of the relay below, which is also the last path segment of its
+  # ESPHome command topic (<topic_prefix>/switch/<object_id>/command). Named
+  # here because the watchdog subscribes to that topic literally.
+  relay_object_id: humidifier
+  # Minutes of MQTT silence that open the relay; 0 disables. Mirrors grow-app's
+  # HUMIDIFIER_WATCHDOG_MINUTES, which sizes its keepalive against this.
+  watchdog_default: "5"
+  # Draw below which a closed relay is not actually misting. Mirrors grow-app's
+  # HUMIDIFIER_MISTING_MIN_W.
+  misting_min_w: "20.0"
+  # Spin-up grace before a quiet meter counts as a fault.
+  misting_grace: 60s
+
+packages:
+  athom_plug: !include packages/athom-plug-base.yaml
+
+# No external_components: no schedule here, so no timezone platform — hence no
+# component_dependency in fleet.yaml either (as irrigation-pump).
+
+wifi:
+  # Never reboot for connectivity. A reboot lands the relay at ALWAYS_OFF, which
+  # is safe, but it also drops the watchdog mid-count and re-runs the whole MQTT
+  # reconnect — pointless churn when riding out the outage already fails dry.
+  reboot_timeout: 0s
+
+mqtt:
+  reboot_timeout: 0s
+  # Proof of life from grow-app. Any command on the relay's own topic restarts
+  # the countdown, including a repeat of the state the relay is already in —
+  # that repeat IS the keepalive, and a plain on_turn_on trigger cannot see it
+  # because ESPHome fires those only on a change.
+  on_message:
+    - topic: grow/daniel-home/${devicename}/switch/${relay_object_id}/command
+      then:
+        - script.execute: watchdog_kick
+  on_connect:
+    # Package list merge appends this after the base's delay + _firmware/config
+    # publish.
+    # NOTE: "component" must match the MQTT discovery topic's component slug —
+    # ESPHome publishes text_sensor discovery under "sensor", so ip_address is
+    # declared as sensor here or grow-app never matches it.
+    # grow-ui.v2 short keys, unindented: AsyncMqttClient silently drops any
+    # publish over the ESP8266 send buffer (2 x TCP_MSS = 2920 B).
+    # Key legend: tests/test_ui_config_payloads.py.
+    - mqtt.publish:
+        topic: grow/daniel-home/${devicename}/_ui/config
+        retain: true
+        qos: 1
+        payload: |-
+          {"schema":"grow-ui.v2","nodeId":"${devicename}",
+          "groups":[
+          {"i":"overview","t":"${friendlyname}","n":10,"v":"metrics","s":"dashboard","p":true},
+          {"i":"controls","t":"Controls","n":20,"v":"quick-controls","s":"dashboard","p":true},
+          {"i":"safety","t":"Watchdog","n":30,"s":"device-settings","d":"controls","p":true},
+          {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
+          {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
+          "entities":[
+          {"c":"binary_sensor","o":"not_misting","g":"overview","r":"metric","n":5,"l":"Not Misting"},
+          {"c":"binary_sensor","o":"watchdog_trip","g":"overview","r":"metric","n":6,"l":"Watchdog Trip"},
+          {"c":"sensor","o":"humidifier_power","g":"overview","r":"metric","n":10,"l":"Power"},
+          {"c":"sensor","o":"voltage","g":"overview","r":"metric","n":20},
+          {"c":"sensor","o":"current","g":"overview","r":"metric","n":30},
+          {"c":"sensor","o":"total_daily_energy","g":"overview","r":"metric","n":40,"l":"Daily Energy"},
+          {"c":"switch","o":"${relay_object_id}","g":"controls","r":"quick-control","n":10,"l":"Humidifier"},
+          {"c":"number","o":"command_watchdog","g":"safety","n":10,"l":"Cut Off After (min, 0 = off)"},
+          {"c":"button","o":"check_firmware_update","g":"maintenance","n":10},
+          {"c":"button","o":"restart","g":"maintenance","n":20},
+          {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
+          {"c":"sensor","o":"uptime","g":"diagnostics","n":20},
+          {"c":"sensor","o":"ip_address","g":"diagnostics","n":30}]}
+
+# ─── Relay — Humidifier ───────────────────────────────────────────────────────
+switch:
+  - platform: gpio
+    name: "Humidifier"
+    id: humidifier_relay
+    pin: GPIO12
+    restore_mode: ALWAYS_OFF
+    icon: mdi:air-humidifier
+    # Closing the relay is also the rearm: it clears whatever trip annunciator
+    # is standing and starts a fresh countdown. ALWAYS_OFF allocates no
+    # preference for relay state, so there is nothing here to flush.
+    on_turn_on:
+      - lambda: id(humidifier_relay).status_clear_error();
+      - script.execute: watchdog_kick
+
+# ─── Watchdog timeout ─────────────────────────────────────────────────────────
+number:
+  - platform: template
+    name: "Command Watchdog"
+    id: command_watchdog
+    entity_category: config
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 120
+    step: 1
+    initial_value: ${watchdog_default}
+    restore_value: true
+    optimistic: true
+    mode: box
+    icon: mdi:timer-alert-outline
+    on_value:
+      # Re-arm on the new value so shortening the timeout takes effect on the
+      # run in progress rather than at the next command.
+      - script.execute: watchdog_kick
+      - lambda: global_preferences->sync();
+
+# ─── Annunciators ─────────────────────────────────────────────────────────────
+binary_sensor:
+  # Short press: toggle the relay (bench / manual). The watchdog still applies.
+  # Long press 4 s: factory reset (from the base package).
+  - id: !extend power_button
+    on_multi_click:
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.2s
+        then:
+          - switch.toggle: humidifier_relay
+
+  # Relay closed, meter quiet: dry tank, or the T7's own panel is off.
+  - platform: template
+    name: "Not Misting"
+    id: not_misting
+    device_class: problem
+    lambda: |-
+      return id(humidifier_relay).state && id(plug_power).state < ${misting_min_w};
+    filters:
+      # The head takes a moment to raise a mist, and the meter averages over
+      # ${sensor_update_interval}; without the grace every start reads as a fault.
+      - delayed_on: ${misting_grace}
+
+  # Mirrors the error status the trip raises, so no preference is allocated for
+  # a second source of truth. Runtime-only: a reboot clears the annunciator, and
+  # ALWAYS_OFF means the relay comes back open anyway, which is the safe state.
+  - platform: template
+    name: "Watchdog Trip"
+    id: watchdog_trip
+    device_class: problem
+    lambda: return id(humidifier_relay).status_has_error();
+
+# ─── Scripts ──────────────────────────────────────────────────────────────────
+script:
+  # The countdown. Restarted by every command on the relay's topic and by the
+  # relay closing; the guards make a disabled watchdog or an open relay a no-op.
+  #
+  # Deliberately NOT stopped when the relay opens: stopping a script from inside
+  # a trigger that a script action fired is the kind of reentrancy that bites
+  # later. The expiry re-checks the relay instead, so a countdown left running
+  # past a legitimate OFF simply lapses.
+  - id: watchdog_kick
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              const float minutes = id(command_watchdog).state;
+              return id(humidifier_relay).state && !std::isnan(minutes) && minutes > 0.0f;
+          then:
+            - delay: !lambda return (uint32_t) (id(command_watchdog).state * 60000.0f);
+            - if:
+                condition:
+                  switch.is_on: humidifier_relay
+                then:
+                  - logger.log:
+                      level: ERROR
+                      format: "No command for %.0f min — grow-app is not driving this relay; failing dry"
+                      args: [id(command_watchdog).state]
+                  - switch.turn_off: humidifier_relay
+                  - lambda: id(humidifier_relay).status_set_error();
+
+  # Overcurrent response (detection in the base package). No latch — see the
+  # relay contract in the header.
+  - id: overcurrent_trip
+    parameters:
+      amps: float
+    then:
+      - logger.log:
+          level: ERROR
+          format: "Overcurrent: %.1f A > ${current_limit} A — humidifier relay off"
+          args: [amps]
+      - switch.turn_off: humidifier_relay
+      - lambda: id(humidifier_relay).status_set_error();
