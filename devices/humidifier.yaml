@@ -123,9 +123,15 @@
 #   registers as one.
 #
 # Annunciators: Watchdog Trip and Overcurrent Fault are separate entities over
-# separate runtime flags, never the relay's single error status — that status is
-# raised by both trips to drive the LED, so reading it would report whichever
-# fault happened as the other one.
+# separate runtime flags, never the relay's single error status. Both latch, and
+# BOTH ARE CLEARED ONLY BY RE-ENERGIZING THE RELAY (or a reboot — the flags are
+# restore_value: no). Nothing clears them on its own; in particular grow-app
+# coming back does not, because after a trip the relay is open and grow-app
+# publishes nothing to it until VPD next reaches the ceiling.
+#
+# Only Overcurrent Fault is a device_class: problem, i.e. an alert in grow-app.
+# The watchdog is not: see the binary_sensor for why an alarm there is a false
+# positive in every direction.
 #
 # No BLE. Athom's factory config runs esp32_ble_tracker + bluetooth_proxy; this
 # fleet has no use for either and they are the single largest consumer of flash
@@ -285,6 +291,7 @@ mqtt:
           {"i":"overview","t":"${friendlyname}","n":10,"v":"metrics","s":"dashboard","p":true},
           {"i":"controls","t":"Controls","n":20,"v":"quick-controls","s":"dashboard","p":true},
           {"i":"safety","t":"Watchdog","n":30,"s":"device-settings","d":"controls","p":true},
+          {"i":"calibration","t":"Misting Calibration","n":35,"s":"device-settings","d":"controls","p":true},
           {"i":"maintenance","t":"Maintenance","n":80,"s":"device-settings","d":"maintenance"},
           {"i":"diagnostics","t":"Diagnostics","n":90,"s":"device-settings","d":"diagnostics"}],
           "entities":[
@@ -297,7 +304,7 @@ mqtt:
           {"c":"sensor","o":"total_daily_energy","g":"overview","r":"metric","n":40,"l":"Daily Energy"},
           {"c":"switch","o":"${relay_object_id}","g":"controls","r":"quick-control","n":10,"l":"Humidifier"},
           {"c":"number","o":"command_watchdog","g":"safety","n":10,"l":"Cut Off After (min, 0 = off)"},
-          {"c":"number","o":"misting_threshold","g":"safety","n":20,"l":"Misting Threshold (W)"},
+          {"c":"number","o":"misting_threshold","g":"calibration","n":10,"l":"Misting Threshold (W)"},
           {"c":"button","o":"check_firmware_update","g":"maintenance","n":10},
           {"c":"button","o":"restart","g":"maintenance","n":20},
           {"c":"sensor","o":"wifi_signal","g":"diagnostics","n":10},
@@ -586,15 +593,26 @@ binary_sensor:
       # would overstate every run in the record this phase exists to build.
       - delayed_on: ${misting_grace}
 
-  # One flag each, NOT the relay's shared error status. Both trips open the same
-  # relay and both raise that status for the LED, so reading it here would
-  # annunciate an overcurrent as "grow-app is not driving this relay" — a claim
-  # about the network when the fault is electrical, and the two want opposite
-  # responses (the watchdog clears when grow-app returns; this does not).
+  # One flag each, never the relay's shared error status: an overcurrent read off
+  # that status would annunciate as "grow-app is not driving this relay", a claim
+  # about the network when the fault is electrical.
+  #
+  # Watchdog Trip carries NO device_class: problem, for the same reason `misting`
+  # does not. grow-app treats a problem sensor as an alert entity
+  # (threshold-match.ts isAlertEntity), and this one would be a false alarm in
+  # both directions. It cannot alert in the case it exists for — the condition IS
+  # grow-app being gone, and a grow-app that is gone raises nothing. And it would
+  # stick true for hours in the case that actually happens: after a trip the relay
+  # is open, so grow-app's keepalive stops (it only re-asserts a relay that is ON)
+  # and decideClimate re-engages only at the 1.2 kPa ceiling, which may be a whole
+  # night away. Nothing arrives to clear it, and a healthy system sits red.
+  #
+  # So the flag is latched STATE, not an alarm: it answers "why is this relay
+  # open" for whoever looks, and re-energizing the relay clears it. Nothing else
+  # does, short of a reboot — see the trip in watchdog_kick.
   - platform: template
     name: "Watchdog Trip"
     id: watchdog_trip
-    device_class: problem
     lambda: return id(watchdog_latched);
 
   - platform: template
@@ -658,11 +676,13 @@ script:
                       format: "No command for %.0f min — grow-app is not driving this relay; failing dry"
                       args: [id(command_watchdog).state]
                   - switch.turn_off: humidifier_relay
-                  # The error status drives the status LED; the flag is what says
-                  # WHICH fault, since both trips raise the same status.
-                  - lambda: |-
-                      id(watchdog_latched) = true;
-                      id(humidifier_relay).status_set_error();
+                  # Flag only — deliberately NOT status_set_error(). That drives
+                  # the status LED, and a supervision lapse is an expected,
+                  # self-correcting action, not a fault needing a human. Leaving
+                  # the LED flashing for the hours until VPD next reaches the
+                  # ceiling would train it to be ignored when overcurrent, which
+                  # DOES need a human, uses it.
+                  - lambda: id(watchdog_latched) = true;
 
   # Overcurrent response. See the relay contract in the header for why it does
   # not disarm anything.
@@ -675,6 +695,8 @@ script:
           format: "Overcurrent: %.1f A > ${current_limit} A — humidifier relay off"
           args: [amps]
       - switch.turn_off: humidifier_relay
+      # The one condition here that needs a human, so it gets the LED as well as
+      # the entity — it is the only writer of the error status.
       - lambda: |-
           id(overcurrent_latched) = true;
           id(humidifier_relay).status_set_error();

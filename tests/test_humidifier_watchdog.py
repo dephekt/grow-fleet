@@ -47,10 +47,6 @@ GROW_APP_TICK_SECONDS = 10
 # on a slow GC rather than on an actual outage.
 MIN_MISSED_KEEPALIVES = 6
 
-# The base package zeroes any power sample under this, so a smaller draw
-# threshold could never be reached.
-PLUG_STANDBY_FLOOR_W = 3.0
-
 DURATION = re.compile(r"(\d+(?:\.\d+)?)\s*(ms|s|min|h)")
 UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "min": 60.0, "h": 3600.0}
 
@@ -61,6 +57,9 @@ def parse_duration(value: str) -> float:
     if not match:
         raise AssertionError(f"unparseable ESPHome duration: {value!r}")
     return float(match.group(1)) * UNIT_SECONDS[match.group(2)]
+
+
+POWER_CLAMP = re.compile(r"x\s*<\s*([\d.]+)")
 
 
 def object_id(name: str) -> str:
@@ -118,6 +117,29 @@ class HumidifierWatchdogTest(unittest.TestCase):
             if isinstance(entry, dict) and entry.get("id") == "humidifier_relay":
                 return entry
         raise AssertionError("humidifier declares no humidifier_relay switch")
+
+    @property
+    def standby_floor_w(self) -> float:
+        """The clamp on plug_power, read from this device rather than restated.
+
+        It used to be a constant here, copied from packages/athom-plug-base.yaml
+        -- which this device does not consume; its clamp is inline. A copy passes
+        forever after the original moves: raise the inline clamp to 10 W while
+        chasing a noisy meter and a threshold anywhere in 4-10 W becomes settable
+        again, where plug_power is floored to exactly 0.0 and a running T7 never
+        registers as misting. That is the inverse of the defect the guard exists
+        for, and a restated constant cannot see it.
+        """
+        for entry in self.config.get("sensor", []):
+            if not isinstance(entry, dict) or entry.get("platform") != "cse7766":
+                continue
+            for filt in entry.get("power", {}).get("filters", []) or []:
+                if not isinstance(filt, dict):
+                    continue
+                match = POWER_CLAMP.search(str(filt.get("lambda", "")))
+                if match:
+                    return float(match.group(1))
+        raise AssertionError("humidifier declares no standby clamp on plug_power")
 
     def number(self, number_id: str) -> dict[str, Any]:
         for entry in self.config.get("number", []):
@@ -267,20 +289,48 @@ class HumidifierWatchdogTest(unittest.TestCase):
 
     def test_trip_opens_the_relay_and_raises_the_annunciator(self) -> None:
         """A trip that logs without opening the relay reads exactly like one that
-        works, and one that opens it without the error status leaves the
-        dashboard unable to tell a watchdog cut from a normal OFF."""
+        works, and one that opens it without setting the flag leaves the dashboard
+        unable to tell a watchdog cut from a normal OFF."""
         then = self.script("watchdog_kick")["then"]
         self.assertIn("humidifier_relay", action_values(then, "switch.turn_off"))
         self.assertIn(
-            "status_set_error",
+            "id(watchdog_latched) = true",
             " ".join(str(v) for v in action_values(then, "lambda")),
-            "the trip must raise humidifier_relay's error status, which drives the LED",
         )
         self.assertEqual(
             object_id(self.binary_sensor("watchdog_trip")["name"]),
             "watchdog_trip",
             "the _ui/config payload names this sensor watchdog_trip",
         )
+
+    def test_only_a_fault_needing_a_human_drives_the_status_led(self) -> None:
+        """The LED is one bit shared by everything, so what may raise it is a
+        policy question. A watchdog cut is expected and self-correcting, and it
+        clears only when the relay is re-energized — which after a trip may be a
+        whole night away, since grow-app publishes nothing to an open relay. An
+        LED left flashing that long trains the operator to ignore it, and
+        overcurrent, which genuinely needs a human, has nothing else."""
+        watchdog = " ".join(
+            str(v) for v in action_values(self.script("watchdog_kick")["then"], "lambda")
+        )
+        overcurrent = " ".join(
+            str(v) for v in action_values(self.script("overcurrent_trip")["then"], "lambda")
+        )
+        self.assertNotIn("status_set_error", watchdog)
+        self.assertIn("status_set_error", overcurrent)
+
+    def test_watchdog_trip_is_state_not_an_alert(self) -> None:
+        """grow-app treats a device_class: problem binary_sensor as an alert
+        entity (threshold-match.ts isAlertEntity). This one would be a false
+        positive in both directions: it cannot fire in the case it exists for,
+        because the condition IS grow-app being gone and a grow-app that is gone
+        raises nothing; and in the case that actually happens — a redeploy that
+        outlasts the timeout — it sticks true for hours, because after the trip
+        the relay is open, the keepalive stops (it only re-asserts a relay that
+        is ON) and decideClimate re-engages only at the 1.2 kPa ceiling. Same
+        reasoning that keeps `misting` off the alert surface."""
+        self.assertIsNone(self.binary_sensor("watchdog_trip").get("device_class"))
+        self.assertEqual(self.binary_sensor("overcurrent_fault").get("device_class"), "problem")
 
     # ── The timeout entity ────────────────────────────────────────────────────
 
@@ -372,27 +422,28 @@ class HumidifierWatchdogTest(unittest.TestCase):
             action_values(self.script("overcurrent_trip")["then"], "switch.turn_off"),
         )
 
-    def test_misting_threshold_clears_the_base_package_standby_floor(self) -> None:
-        """A threshold under the floor is unreachable, so an idle T7 would read
-        as misting forever."""
+    def test_misting_threshold_default_clears_the_standby_floor(self) -> None:
+        """A default at or under the floor would read a resting T7 as misting."""
         threshold = float(self.substitute(str(self.number("misting_threshold")["initial_value"])))
+        floor = self.standby_floor_w
         self.assertGreater(
             threshold,
-            PLUG_STANDBY_FLOOR_W,
-            f"the Misting Threshold default is {threshold} W, at or under the base "
-            f"package's {PLUG_STANDBY_FLOOR_W} W standby suppression",
+            floor,
+            f"the Misting Threshold default is {threshold} W, at or under the "
+            f"{floor} W standby suppression on plug_power",
         )
 
     def test_misting_threshold_cannot_be_typed_into_the_clamped_range(self) -> None:
         """plug_power is clamped to exactly 0.0 below the standby floor, and the
-        misting lambda is `>=`, so a threshold of 0 makes `0.0 >= 0.0` true and
-        the observation record silently becomes a copy of the relay state. The
-        entity is a box the operator types into live, so the unreachable range is
-        made unreachable rather than merely documented."""
+        misting lambda is `>=`, so a threshold at or under the clamp makes
+        `0.0 >= threshold` true while resting and the observation record silently
+        becomes a copy of the relay state. The entity is a box the operator types
+        into live, so the unreachable range is made unreachable rather than
+        merely documented."""
         self.assertGreater(
             float(self.number("misting_threshold")["min_value"]),
-            PLUG_STANDBY_FLOOR_W,
-            "min_value must sit above the standby clamp",
+            self.standby_floor_w,
+            "min_value must sit above the standby clamp on plug_power",
         )
 
     def test_misting_reads_the_tunable_threshold_not_a_baked_constant(self) -> None:
