@@ -483,5 +483,6 @@ class HumidifierWatchdogTest(unittest.TestCase):
             "misting must report the power series as measured, both edges",
         )
 
+
 if __name__ == "__main__":
     unittest.main()
